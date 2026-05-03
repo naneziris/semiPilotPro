@@ -186,6 +186,10 @@ The Pattern Critic **fails loudly** if the wiki is missing. It does not silently
 **Critics run on Opus** because a bad gate call is the most expensive error in the pipeline.
 **Implementation is a prompt (`/implement-plan`), not an agent.** Agents reason and decide; implementation is file editing.
 
+### GHCP model-selection caveat
+
+GitHub Copilot in VS Code currently ignores the `model:` field in a subagent's own `.agent.md` frontmatter — the spawned subagent inherits the caller's model unless the caller overrides it at spawn time. The `@manager` works around this by naming the model explicitly in every spawn (`Spawn @<agent> with model <Model Name (copilot)> and task: …`). The model column in the table above is the source of truth for those overrides; see `agents/manager.agent.md` → "Subagent Model Selection" for the exact spawn strings.
+
 ---
 
 ## Prompt Inventory (3 total)
