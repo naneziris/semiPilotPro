@@ -25,7 +25,7 @@ If `.wiki/` does not exist, stop and report: "The wiki does not exist. Run `#wik
 
 ## 2. Ask 3–5 clarifying questions
 
-Post them directly in chat. Wait for answers. Never ask more than five. Typical areas:
+Post all questions in a single numbered message. Do not send them one at a time — wait for one answer before asking the next. Wait for the user's reply before drafting. Never ask more than five. Typical areas:
 - Who is the user and what are they trying to accomplish?
 - What is the current behavior (if any) and what should change?
 - What counts as success? (drives acceptance criteria)
