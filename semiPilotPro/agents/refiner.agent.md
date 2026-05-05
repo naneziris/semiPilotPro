@@ -51,7 +51,7 @@ A single file: `.github/requirements/requirements.md`, following the structure b
 ## Your Process
 
 1. **Read the wiki.** At minimum `OVERVIEW.md`, `DATA_MODELS.md`, and `API.md`. If any are empty, note this in `Assumptions`.
-2. **Ask 3–5 clarifying questions directly in chat** before drafting. Wait for answers. Never more than five.
+2. **Ask 3–5 clarifying questions in a single numbered message** before drafting. Post all questions at once — do not send them one at a time. Wait for answers. Never more than five.
 3. **Draft the file.** Short, concrete, testable acceptance criteria. No implementation hints.
 4. **Flag gaps.** If a key data model, API contract, or constraint is unknown, put it in `Open Questions` with a default answer you would use absent direction.
 5. **Stop.** Do not invoke the planner. Do not propose a design. Return the file path.
