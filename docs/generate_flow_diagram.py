@@ -225,8 +225,8 @@ def main():
         ax.text(sx + 0.05, y - 0.22, desc, fontsize=8.5, color="#555")
 
     # YAML rail callout (bottom-left)
-    rail_x, rail_y = 0.3, 3.5
-    rail_w, rail_h = 4.0, 4.5
+    rail_x, rail_y = 0.3, 3.0
+    rail_w, rail_h = 4.2, 5.2
     rect = FancyBboxPatch(
         (rail_x, rail_y), rail_w, rail_h,
         boxstyle="round,pad=0.05,rounding_size=0.1",
@@ -243,21 +243,23 @@ def main():
         "2.  read_wiki_patterns",
         "3.  write_tests_first  (TDD red)",
         "4.  write_code",
-        "5.  lint",
-        "6.  unit_tests",
-        "7.  complexity_check",
+        "5.  lint  ✦ hard block",
+        "6.  type_check  ✦ hard block",
+        "      └─ tsc --noEmit / mypy",
+        "7.  unit_tests  ✦ hard block",
+        "8.  complexity_check",
         "      └─ #code-analyzer",
-        "8.  wiki_pattern_check",
-        "9.  submit → @pattern-critic",
+        "9.  wiki_pattern_check",
+        "10. submit → @pattern-critic",
     ]
     for i, step in enumerate(rail_steps):
         ax.text(rail_x + 0.2,
-                rail_y + rail_h - 0.75 - i * 0.36,
-                step, fontsize=9, color="#333", family="monospace")
+                rail_y + rail_h - 0.75 - i * 0.37,
+                step, fontsize=8.5, color="#333", family="monospace")
 
     # Enforces arrow from rail box to implement-plan stage
     arr = FancyArrowPatch(
-        (rail_x + rail_w, rail_y + rail_h * 0.5),
+        (rail_x + rail_w, rail_y + rail_h * 0.55),
         (cx - bw / 2 - 0.05, 4.85),
         arrowstyle="->",
         mutation_scale=16,
@@ -266,12 +268,12 @@ def main():
         linestyle=(0, (2, 2)),
     )
     ax.add_patch(arr)
-    ax.text(rail_x + rail_w + 0.4, rail_y + rail_h * 0.5 + 0.25,
+    ax.text(rail_x + rail_w + 0.4, rail_y + rail_h * 0.55 + 0.25,
             "enforces", fontsize=9, color=C_PROMPT, style="italic")
 
     # Footnote
     ax.text(W / 2, 0.2,
-            "Exactly 3 human sync points  •  Critics block (binary APPROVED/REJECTED)  •  "
+            "Exactly 2 human sync points  •  Critics block (binary APPROVED/REJECTED)  •  "
             "Tests written before code  •  Scribe owns all .wiki/ writes",
             ha="center", fontsize=10, color="#555", style="italic")
 
