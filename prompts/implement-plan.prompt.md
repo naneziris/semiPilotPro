@@ -15,6 +15,37 @@ Take a deep breath and work through this step by step.
 1. Confirm `.github/implementation-plan.md` exists. If not, stop.
 2. Confirm `.wiki/` exists and `PATTERNS.md` is non-empty. If empty, stop: "Wiki patterns not populated. `@scribe` must seed `PATTERNS.md` before implementation."
 3. Read the plan in full. Read `.wiki/PATTERNS.md` in full.
+4. Execute the checkpoint initialization procedure below before running any YAML step.
+
+# CHECKPOINT MANAGEMENT
+
+## Cycle ID derivation (deterministic)
+
+1. If `implementation-plan.md` has YAML frontmatter with a `cycle_id:` key, use that value verbatim.
+2. If the filename is not `implementation-plan.md` (e.g., `2025-01-15-auth-feature-implementation-plan.md`), use the filename stem (e.g., `2025-01-15-auth-feature-implementation-plan`).
+3. Otherwise, the `cycle_id` is `implementation-plan`.
+
+If the plan file is always at the default path with no frontmatter `cycle_id:`, the cycle_id is `implementation-plan`. Delete `.github/implementation-progress.json` to force a fresh start when starting a logically new implementation under the same filename.
+
+## Initialization
+
+At the start of every run:
+
+1. Derive the `cycle_id` per the rule above.
+2. Check whether `.github/implementation-progress.json` exists.
+   - **If it exists and its `cycle_id` matches:** Read the `steps` object. Skip every step whose status is `"done"`. Resume from the first step whose status is `"pending"` or `"failed"`. Report: "Resuming from step `<step_name>`. Steps already done: `<list>`."
+   - **If it exists but its `cycle_id` does not match:** Overwrite the file with a fresh record (all steps `"pending"`). Report: "Cycle ID mismatch — starting fresh."
+   - **If it does not exist:** Create it with all steps set to `"pending"` and `started_at` set to now.
+
+## Progress file write rules
+
+- After each step **succeeds**: set that step's status to `"done"`, clear `failed_step` and `failure_output`, update `last_updated`.
+- After each step **fails** (hard block): set that step's status to `"failed"`, set `failed_step` to the step name, set `failure_output` to the verbatim error, update `last_updated`. Then stop — do not proceed to the next step.
+- Write the file atomically after each update (read → modify → write full file).
+
+## Progress file location
+
+`.github/implementation-progress.json` — see `semipilot-core.md` § Ephemeral Artifacts for the full schema.
 
 # THE YAML RAIL (execute in order)
 
@@ -22,11 +53,13 @@ Take a deep breath and work through this step by step.
 - Read `.github/implementation-plan.md` completely.
 - Confirm you understand every `Implementation Step` and every row of the `Test Plan`.
 - Block: if anything is unclear, stop and ask Dev. Do not guess.
+- → Checkpoint: mark `read_plan` as `"done"`.
 
 ## Step 2: read_wiki_patterns
 - Read `.wiki/PATTERNS.md` completely.
 - Extract the naming conventions, DI patterns, error-handling patterns, and test conventions you must follow.
 - Block: if the file is empty or missing, stop.
+- → Checkpoint: mark `read_wiki_patterns` as `"done"`.
 
 ## Step 3: write_tests_first
 - For every row in the plan's `Test Plan`, write the test file and its assertions **before** any implementation code.
@@ -34,17 +67,20 @@ Take a deep breath and work through this step by step.
 - Run the test suite and confirm they fail for the right reason (not a syntax error or import error).
 - **Block:** if any test passes at this stage when it should be red, stop and investigate — this means the test is not actually exercising new behavior.
 - Report: "Tests written: `<list of test file paths>`. All failing as expected."
+- → Checkpoint: mark `write_tests_first` as `"done"`.
 
 ## Step 4: write_code
 - Implement just enough code to make the tests pass.
 - Follow the naming and DI patterns from `PATTERNS.md`.
 - Do not add scope beyond what the plan authorizes.
 - **Block:** if you cannot make a test pass without adding scope the plan did not authorize, stop and report what is blocking rather than expanding scope.
+- → Checkpoint: mark `write_code` as `"done"`.
 
 ## Step 5: lint
 - Detect the linter from `package.json` / `pyproject.toml` / `.eslintrc` / `.flake8` / etc.
 - Run the linter. Fix every error. Warnings may remain only if the plan explicitly permits it.
 - **Hard block:** if any lint error remains after your fix attempt, stop here. Post the error output. Do not proceed to step 6.
+- → Checkpoint: mark `lint` as `"done"` on pass, `"failed"` on hard block (record verbatim error in `failure_output`).
 
 ## Step 6: type_check
 - If the project is TypeScript, run `tsc --noEmit` (or the equivalent script in `package.json`).
@@ -52,6 +88,7 @@ Take a deep breath and work through this step by step.
 - Fix every type error. Do not suppress errors with `// @ts-ignore`, `// @ts-expect-error`, `# type: ignore`, or any equivalent suppression comment unless the plan explicitly authorizes it and explains why.
 - **Hard block:** if any type error remains after your fix attempt, stop here. Post the full `tsc` / `mypy` output. Do not proceed to step 7.
 - If the project has no type checker, note "No type checker detected" and continue.
+- → Checkpoint: mark `type_check` as `"done"` on pass (or "no type checker"), `"failed"` on hard block (record verbatim output in `failure_output`).
 
 ## Step 7: unit_tests
 - Run the full test suite, not just the new tests.
@@ -60,6 +97,7 @@ Take a deep breath and work through this step by step.
   2. The failure output verbatim.
   3. Whether the failure is in new test code or pre-existing tests.
   Do not proceed to step 8. Do not attempt a silent fix and re-run without reporting.
+- → Checkpoint: mark `unit_tests` as `"done"` on pass, `"failed"` on hard block (record test failure output in `failure_output`).
 
 ## Step 8: complexity_check
 - Run `#code-analyzer` on each file you modified.
@@ -67,14 +105,17 @@ Take a deep breath and work through this step by step.
 - If a function exceeds 15, refactor it before proceeding — unless the plan explicitly authorizes the complexity.
 - File-level complexity increase over 20% → flag for Gate 2 review but do not block.
 - Report: complexity results per file.
+- → Checkpoint: mark `complexity_check` as `"done"` (this step does not hard-block — always `"done"` regardless of flags).
 
 ## Step 9: wiki_pattern_check
 - Re-read `.wiki/PATTERNS.md`.
 - For each file you changed, verify naming, DI, error handling, and test style match.
 - **Block:** on any deviation you cannot justify by citing a specific pattern in the wiki.
+- → Checkpoint: mark `wiki_pattern_check` as `"done"`.
 
 ## Step 10: submit_for_pattern_critic
 - Produce the handoff report (format below).
+- → Checkpoint: mark `submit_for_pattern_critic` as `"done"`.
 - Stop. Dev invokes `@pattern-critic`.
 
 # REPORTING FORMAT (mandatory)

@@ -256,6 +256,15 @@ This is working as intended. Read the verbatim error output the implementer post
 **"The implementer reported a step as 'done' but the diff contradicts it."**
 This is a rail violation — `@pattern-critic` will catch it at Gate 2 via the YAML rail completeness check. If you notice it before running the critic, re-run `/implement-plan` from the blocked step.
 
+**"I want to understand why the spec critic keeps rejecting this cycle."**
+Read `.github/rejection-log.md`. Every REJECTED verdict is appended there with a timestamp, the verbatim reasoning, and the exact fix required. Sort by Cycle to see if the same root cause is recurring.
+
+**"`/implement-plan` blocked mid-run — how do I resume without re-running completed steps?"**
+The progress file `.github/implementation-progress.json` tracks each step's status. Re-invoke `/implement-plan` — it reads the file, sees which steps are `"done"`, and resumes from the first `"pending"` or `"failed"` step. No manual intervention needed.
+
+**"I want to restart the implementation from scratch, ignoring the saved progress."**
+Delete `.github/implementation-progress.json`. The next `/implement-plan` run will start fresh and overwrite the file.
+
 ---
 
 ## 9. What this system does not do
@@ -473,3 +482,84 @@ The critics will catch hallucinated tool references, missing metadata, naming vi
 | Runs a standalone script, returns JSON or text | Skill |
 
 If you're unsure, default to a prompt. Agents are for things that genuinely need to *reason before deciding*.
+
+---
+
+## 13. The rejection log (`.github/rejection-log.md`)
+
+Every time `@spec-critic` or `@pattern-critic` returns a REJECTED verdict, the critic appends a structured entry to `.github/rejection-log.md`. The file is created on first rejection and is append-only — entries are never modified or deleted.
+
+**What each entry contains:**
+
+- **Timestamp** — ISO 8601 datetime of the rejection.
+- **Critic** — which gate issued the rejection (`spec-critic` or `pattern-critic`).
+- **Cycle** — a short identifier for the requirements or implementation cycle. Derived from the plan/requirements filename stem, or `YYYY-MM-DD` if the file uses the default name.
+- **Rejection reason** — verbatim from the critic's Reasoning field. The exact language the critic used.
+- **Required fixes** — bullet list of the concrete changes that would unblock the next attempt.
+
+**Sample entry:**
+
+```
+**Timestamp:** 2025-03-12T09:14:22Z
+**Critic:** spec-critic
+**Cycle:** 2025-03-12
+**Rejection reason:** The spec requires a `subscription_tier` field that does not exist in the current `User` schema in DATA_MODELS.md. The field must be added before this spec can proceed.
+
+**Required fixes:**
+- Add `subscription_tier: enum(free, pro, enterprise)` to the User model in DATA_MODELS.md.
+```
+
+**How to use it:**
+
+- **Debugging repeated failures.** If a cycle keeps getting rejected at the same gate, read the log. The same root cause appearing across multiple entries points to a structural gap in the wiki or a misunderstood constraint.
+- **Scribe input.** When running `@scribe` at the end of a release, hand it the rejection log: `"Read .github/rejection-log.md and summarize any recurring rejection patterns in the CHANGELOG."` This converts operational history into durable architectural knowledge.
+- **Onboarding.** New team members can read the log to understand which constraints the project enforces in practice and which ones have already caused rework.
+
+`@scribe` does not write to this file. The critics own it exclusively.
+
+---
+
+## 14. Implementation checkpoint (`.github/implementation-progress.json`)
+
+`/implement-plan` writes and maintains a checkpoint file that tracks per-step status across the 10-step YAML rail. This file enables resuming a blocked run without re-executing steps that already passed.
+
+**How resume works:**
+
+1. Re-invoke `/implement-plan` after fixing whatever caused the block.
+2. The implementer reads `.github/implementation-progress.json` and checks the `cycle_id`.
+3. If the `cycle_id` matches the current plan, it skips all steps marked `"done"` and resumes from the first `"pending"` or `"failed"` step.
+4. The report at the end will note which steps were skipped.
+
+**cycle_id derivation** (deterministic, no user input needed):
+- If `implementation-plan.md` has a `cycle_id:` key in its YAML frontmatter, that value is used.
+- If the filename is not `implementation-plan.md` (e.g., a descriptively named file), the filename stem is used.
+- Otherwise, the `cycle_id` is `implementation-plan`.
+
+**Force a fresh start:**
+Delete `.github/implementation-progress.json`. The next run starts from step 1 regardless of what was previously done.
+
+**What the file looks like mid-run (blocked at `unit_tests`):**
+
+```json
+{
+  "cycle_id": "implementation-plan",
+  "started_at": "2025-03-12T10:00:00Z",
+  "last_updated": "2025-03-12T10:18:43Z",
+  "steps": {
+    "read_plan": "done",
+    "read_wiki_patterns": "done",
+    "write_tests_first": "done",
+    "write_code": "done",
+    "lint": "done",
+    "type_check": "done",
+    "unit_tests": "failed",
+    "complexity_check": "pending",
+    "wiki_pattern_check": "pending",
+    "submit_for_pattern_critic": "pending"
+  },
+  "failed_step": "unit_tests",
+  "failure_output": "FAIL src/auth/auth.service.test.ts\n  ● AuthService › login › should return 401 on invalid password\n    Expected: 401\n    Received: 200"
+}
+```
+
+This file is never committed — add `.github/implementation-progress.json` to `.gitignore`.

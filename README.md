@@ -72,4 +72,13 @@ Exactly 2 human sync points per successful cycle. On rejection, Dev decides to r
 4. **Implementation is a prompt, not an agent.** Agents reason; prompts execute.
 5. **Dry-run everywhere.** Every skill supports `--dry-run` with no side effects.
 
+## Operational artifacts
+
+Two files are written by the pipeline at runtime (not part of `.wiki/`):
+
+- **`.github/rejection-log.md`** — append-only log of every critic rejection, with timestamp, verbatim reason, and required fixes. Written by `@spec-critic` and `@pattern-critic` on REJECTED verdicts. Add to `.gitignore` or commit it — your call.
+- **`.github/implementation-progress.json`** — per-step checkpoint for `/implement-plan`. Enables resuming a blocked YAML rail run from the failed step rather than starting over. Delete the file to force a fresh start. Add to `.gitignore`.
+
+See `USER_GUIDE.md` §13–14 for details on both.
+
 See `copilot-instructions.md` for the full contract.
