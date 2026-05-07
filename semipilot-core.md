@@ -132,6 +132,14 @@ implementation_rail:
 **`block_on_failure: true`** — the implementer stops and posts the error verbatim. It does not skip ahead or silently retry.
 **`flag_for_review: true`** — the implementer proceeds but attaches a warning the human must acknowledge during Gate 2.
 
+### Checkpoint File (`.github/implementation-progress.json`)
+
+`/implement-plan` writes this file at the start of every run and updates it after each step completes or fails. On resume, if the file exists and its `cycle_id` matches the current plan, all steps marked `done` are skipped and execution resumes from the first `pending` or `failed` step. If the `cycle_id` does not match, the file is overwritten and the run starts fresh.
+
+To force a fresh start without changing the plan: delete `.github/implementation-progress.json`.
+
+See [Ephemeral Artifacts](#ephemeral-artifacts) for the schema.
+
 ---
 
 ## The Wiki (`.wiki/`)
@@ -159,6 +167,57 @@ If `.wiki/` does not exist, the first step of any non-trivial task is:
 `wiki-init` scaffolds the seven files from templates and seeds `OVERVIEW.md` and `DATA_MODELS.md` from `package.json` / `pyproject.toml` / detected schema files. All other wiki content is added by `@scribe` as features land.
 
 The Pattern Critic **fails loudly** if the wiki is missing. It does not silently pass.
+
+---
+
+## Ephemeral Artifacts
+
+<!-- These files are NOT part of .wiki/ — they are operational artifacts produced during a pipeline run.
+     .wiki/ is architectural knowledge owned by @scribe. These are process-bound debug/resume files
+     written by the pipeline itself and read by Dev or the implementer. They do not belong in the wiki
+     table because they carry no lasting architectural signal and Scribe has no business writing them. -->
+
+| File | Owner | Purpose |
+|---|---|---|
+| `.github/rejection-log.md` | Critics (`@spec-critic`, `@pattern-critic`) | Append-only log of every REJECTED verdict. Written by the critic that issued the rejection. `@scribe` reads it when writing `CHANGELOG.md` to summarize rejection patterns across a release. |
+| `.github/implementation-progress.json` | `/implement-plan` | Checkpoint file tracking per-step status for the current implementation run. Enables resume after a blocked step. |
+
+**`.github/rejection-log.md` entry schema** (entries separated by `---`):
+
+```
+**Timestamp:** <ISO 8601>
+**Critic:** <spec-critic | pattern-critic>
+**Cycle:** <cycle_id>
+**Rejection reason:** <verbatim reasoning from critic verdict>
+
+**Required fixes:**
+- <fix item 1>
+- <fix item N>
+```
+
+**`.github/implementation-progress.json` schema:**
+
+```json
+{
+  "cycle_id": "string",
+  "started_at": "ISO 8601",
+  "last_updated": "ISO 8601",
+  "steps": {
+    "read_plan": "pending | done | failed",
+    "read_wiki_patterns": "pending | done | failed",
+    "write_tests_first": "pending | done | failed",
+    "write_code": "pending | done | failed",
+    "lint": "pending | done | failed",
+    "type_check": "pending | done | failed",
+    "unit_tests": "pending | done | failed",
+    "complexity_check": "pending | done | failed",
+    "wiki_pattern_check": "pending | done | failed",
+    "submit_for_pattern_critic": "pending | done | failed"
+  },
+  "failed_step": "string | null",
+  "failure_output": "string | null"
+}
+```
 
 ---
 
