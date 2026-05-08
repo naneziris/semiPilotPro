@@ -65,7 +65,7 @@ User Idea
 ┌──────────────────────────────────────────┐
 │ 5. @pattern-critic   (GATE 2)            │  reads diff + .wiki/PATTERNS.md
 │    APPROVED → continue                   │  + .wiki/DEPENDENCIES.md
-│    REJECTED → back to /implement-plan    │
+│    REJECTED → /fix-rejection             │
 └──────────────────────────────────────────┘
   │ (human sync: approve diff)
   ▼
@@ -257,7 +257,7 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 
 ---
 
-## Prompt Inventory (6 total)
+## Prompt Inventory (7 total)
 
 | Prompt | Owns | Forbidden from |
 |---|---|---|
@@ -297,12 +297,10 @@ All skills support `--dry-run`. All skill folder names match their YAML `name`.
 
 ## What This System Does NOT Do
 
-- No PowerPoint building, no Socratic tutoring, no GitLab fetching, no orchestration agents.
 - No shadow production verification. That belongs in CI/CD, not in an IDE agent.
 - No multi-layer router. Dev drives the pipeline directly; the pipeline is the routing.
 - No redundant validation agent. Critics replaced it.
-
-If you want one of the removed capabilities, use the old `semiPilot/` system in parallel. This system stays small on purpose.
+- No automatic PR creation or merging. `/create-mr-description` generates the description; you open the PR.
 
 ---
 

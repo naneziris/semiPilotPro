@@ -11,28 +11,30 @@ Every change follows the same pipeline:
 ```
 User Idea
   │
-  ▼  (or run /run-pipeline to chain everything automatically)
+  ▼  (or /run-pipeline to chain everything automatically)
   │
   ▼
-Refine Requirements       →  .github/requirements/requirements.md
+/refine-requirements      →  .github/requirements/requirements.md
   │
   ▼
-Gate 1: @spec-critic      →  APPROVED or REJECTED (+ rejection-log.md)
-  │ ← human approves spec
+@spec-critic  (Gate 1)    →  APPROVED or REJECTED
+  │  REJECTED → fix requirements, re-run @spec-critic
+  │  APPROVED ← human approves spec
   ▼
-Create Implementation Plan  →  .github/implementation-plan.md
+/create-implementation-plan  →  .github/implementation-plan.md
   │
   ▼
-Implement (YAML rail)     →  code + tests, 11 enforced steps
+/implement-plan  (YAML rail) →  code + tests, 11 enforced steps
   │
   ▼
-Gate 2: @pattern-critic   →  APPROVED or REJECTED (+ rejection-log.md)
-  │ ← human approves diff
+@pattern-critic  (Gate 2) →  APPROVED or REJECTED
+  │  REJECTED → /fix-rejection → re-run @pattern-critic
+  │  APPROVED ← human approves diff
   ▼
-MR Description (optional) →  structured PR description
+/create-mr-description    →  structured PR description (optional)
   │
   ▼
-Scribe                    →  updated .wiki/ + CHANGELOG
+@scribe                   →  updated .wiki/ + CHANGELOG
 ```
 
 Two human decisions per successful cycle: approve the spec, approve the diff. Everything else runs automatically.
@@ -56,6 +58,7 @@ semiPilotPro/
 │   ├── refine-requirements.prompt.md   # Writes requirements.md
 │   ├── create-implementation-plan.prompt.md
 │   ├── implement-plan.prompt.md        # Executes the 11-step YAML rail
+│   ├── fix-rejection.prompt.md         # Applies Gate 2 fixes and resubmits
 │   ├── create-mr-description.prompt.md # Generates structured PR description
 │   └── explain-changes.prompt.md       # Answers "why was X changed?" with source citations
 ├── skills/
@@ -110,7 +113,9 @@ Budget 30–60 minutes. The critics cannot function without it and will fail lou
 Or manually, step by step:
 
 ```
-/refine-requirements → @spec-critic → /create-implementation-plan → /implement-plan → @pattern-critic → /create-mr-description → @scribe
+/refine-requirements → @spec-critic → /create-implementation-plan → /implement-plan
+  → @pattern-critic  (REJECTED? → /fix-rejection → @pattern-critic)
+  → /create-mr-description → @scribe
 ```
 
 ---

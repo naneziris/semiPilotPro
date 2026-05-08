@@ -111,7 +111,7 @@ The implementer reports every step. The pattern critic verifies the report again
 Reads the diff against `.wiki/PATTERNS.md`, `DEPENDENCIES.md`, and `API.md`, verifies tests exist on disk, and runs `#code-analyzer` on changed files. Binary verdict.
 
 - **APPROVED** → pause for your approval, then continue.
-- **REJECTED** → the critic lists the specific fixes in order. Re-run `/implement-plan` until the diff passes.
+- **REJECTED** → the critic lists the specific fixes in order. Run `/fix-rejection` — it reads the rejection log, shows you what it will change, applies only those fixes, re-runs the downstream verification steps, and resubmits to `@pattern-critic`. Do not re-run `/implement-plan` from scratch.
 
 ### Step 6 — MR Description (optional)
 
@@ -140,9 +140,9 @@ The pipeline pauses for your explicit approval exactly twice per successful cycl
 | **Sync 1** | After Spec Critic APPROVED | Does this spec reflect what I actually want? |
 | **Sync 2** | After Pattern Critic APPROVED | Is the diff the change I want to merge? |
 
-On any critic rejection you also decide: retry with the critic's fix, or abandon?
+On any critic rejection you also decide: apply the fix or abandon?
 
-No other automatic pauses. Internal handoffs are direct — you invoke the next step yourself after each one completes.
+When running manually, you invoke each step yourself. When using `/run-pipeline`, handoffs between steps are automatic — it pauses only at the two sync gates and on any critic rejection.
 
 ---
 
@@ -250,7 +250,7 @@ The diagram at the top of this guide is the single source of truth for the visib
 - **Orange dashed arrows** to the wiki = read access. Agents read from these files.
 - **Purple solid arrow** from `@scribe` to the wiki = write access. Only scribe writes.
 - **Left panel** = skills, callable any time, from inside or outside the pipeline.
-- **YAML rail callout** (bottom-left) = the deterministic 10-step sequence `/implement-plan` must follow.
+- **YAML rail callout** (bottom-left) = the deterministic 11-step sequence `/implement-plan` must follow.
 
 ---
 
@@ -283,6 +283,9 @@ The progress file `.github/implementation-progress.json` tracks each step's stat
 **"I want to restart the implementation from scratch, ignoring the saved progress."**
 Delete `.github/implementation-progress.json`. The next `/implement-plan` run will start fresh and overwrite the file.
 
+**"Pattern critic rejected my diff — what do I do?"**
+Run `/fix-rejection`. It reads the latest entry in `.github/rejection-log.md`, shows you the required fixes and which files it will touch, waits for your `confirm`, applies only those changes, re-runs lint/type_check/unit_tests/explain_test_changes/complexity_check/wiki_pattern_check, and resubmits to `@pattern-critic`. Do not delete the checkpoint and re-run `/implement-plan` from scratch — that reruns all 11 steps unnecessarily.
+
 ---
 
 ## 9. What this system does not do
@@ -290,8 +293,6 @@ Delete `.github/implementation-progress.json`. The next `/implement-plan` run wi
 - No shadow production traffic verification (that's CI/CD, not an IDE tool).
 - No cross-repo orchestration.
 - No automatic PR creation or merging — `/create-mr-description` generates the description; you open the PR.
-
-If you want any of the removed capabilities from legacy `semiPilot/`, run both systems in parallel. They don't conflict.
 
 ---
 
@@ -538,7 +539,7 @@ Every time `@spec-critic` or `@pattern-critic` returns a REJECTED verdict, the c
 
 ## 14. Implementation checkpoint (`.github/implementation-progress.json`)
 
-`/implement-plan` writes and maintains a checkpoint file that tracks per-step status across the 10-step YAML rail. This file enables resuming a blocked run without re-executing steps that already passed.
+`/implement-plan` writes and maintains a checkpoint file that tracks per-step status across the 11-step YAML rail. This file enables resuming a blocked run without re-executing steps that already passed.
 
 **How resume works:**
 
@@ -570,6 +571,7 @@ Delete `.github/implementation-progress.json`. The next run starts from step 1 r
     "lint": "done",
     "type_check": "done",
     "unit_tests": "failed",
+    "explain_test_changes": "pending",
     "complexity_check": "pending",
     "wiki_pattern_check": "pending",
     "submit_for_pattern_critic": "pending"
