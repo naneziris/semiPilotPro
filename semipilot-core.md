@@ -265,6 +265,7 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 | `/refine-requirements` | Writing `requirements.md` | Making code changes |
 | `/create-implementation-plan` | Writing `implementation-plan.md` | Writing final code |
 | `/implement-plan` | Writing code + tests, following the YAML rail | Modifying the plan or requirements |
+| `/fix-rejection` | Applying pattern-critic required fixes, re-running downstream steps, resubmitting | Touching files outside the critic's required fixes |
 | `/create-mr-description` | Generating a structured MR description from requirements + plan + diff | Editing any source file |
 | `/explain-changes` | Answering questions about why specific changes were made, citing plan + diff | Speculating beyond documented sources |
 

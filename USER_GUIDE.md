@@ -168,6 +168,7 @@ Everything in SemiPilot Pro is designed to be useful in isolation.
 | `/refine-requirements` | Shortest path to a clean spec. Identical to invoking `@refiner`. |
 | `/create-implementation-plan` | You have an approved spec from any source (including hand-written) and want a plan without running Gate 1. |
 | `/implement-plan` | You already have a plan and want code written under the YAML rail — tests first, type-checked, linted, complexity-checked. |
+| `/fix-rejection` | After a Gate 2 REJECTION, applies only the critic's required fixes, re-runs the downstream verification steps (lint, type_check, unit_tests, explain_test_changes, complexity_check, wiki_pattern_check), and resubmits to `@pattern-critic`. Do not re-run `/implement-plan` from scratch. |
 | `/create-mr-description` | After Gate 2 approval, generates a structured MR description (What / Why / Changes / Tests / Acceptance Criteria / Risks / Notes for Reviewer) ready to paste into your PR. |
 | `/explain-changes` | Ask a specific question about why a file, function, or test was changed. Answers cite `requirements.md`, `implementation-plan.md`, or the diff — no speculation. |
 

@@ -115,8 +115,8 @@ Apply the full rules from `@pattern-critic`:
 
 **If REJECTED:**
 - Append to `.github/rejection-log.md`.
-- Say: "Gate 2 rejected. Required fix: [required fix from verdict]. Type **retry** to re-run implementation from the checkpoint, or **abandon** to stop."
-- On **retry**, go back to Step 4. On **abandon**, stop.
+- Say: "Gate 2 rejected. Required fix: [required fix from verdict]. Type **fix** to apply the critic's fixes and resubmit, or **abandon** to stop."
+- On **fix**, apply the rules from `/fix-rejection` in full (show the FIX PLAN, wait for confirm, apply fixes, re-run downstream steps, emit FIX REPORT, then loop back to Step 5). On **abandon**, stop.
 
 **If APPROVED:**
 

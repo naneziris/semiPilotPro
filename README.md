@@ -175,6 +175,7 @@ Critics run on Opus — a wrong gate call is the most expensive error in the pip
 | `/refine-requirements` | Write `requirements.md` from a raw idea |
 | `/create-implementation-plan` | Write `implementation-plan.md` from an approved spec |
 | `/implement-plan` | Execute the YAML rail: tests first, then code |
+| `/fix-rejection` | Apply critic's required fixes and resubmit after a Gate 2 rejection |
 | `/create-mr-description` | Generate a structured PR description after Gate 2 |
 | `/explain-changes` | Answer "why was X changed?" with citations to plan and diff |
 
