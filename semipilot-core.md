@@ -29,9 +29,16 @@ Copilot operates as a **senior engineering collaborator**, not a tool or assista
 
 ## The Pipeline
 
+You can drive the pipeline in two ways:
+
+- **Manual** — invoke each step yourself in order. Gives you full control between steps.
+- **Auto** — run `/run-pipeline` once. It chains all steps automatically and pauses only at the two human sync gates.
+
 ```
 User Idea
-  │
+  │  ┌─────────────────────────────┐
+  │  │ /run-pipeline (optional)    │  chains all steps; pauses at gates
+  │  └─────────────────────────────┘
   ▼
 ┌──────────────────────────────────────────┐
 │ 1. /refine-requirements                  │  → .github/requirements/requirements.md
@@ -63,17 +70,22 @@ User Idea
   │ (human sync: approve diff)
   ▼
 ┌──────────────────────────────────────────┐
-│ 6. @scribe                               │  → updated .wiki/ + CHANGELOG
+│ 6. /create-mr-description  (optional)    │  → structured MR description
+└──────────────────────────────────────────┘
+  │
+  ▼
+┌──────────────────────────────────────────┐
+│ 7. @scribe                               │  → updated .wiki/ + CHANGELOG
 └──────────────────────────────────────────┘
 ```
 
-### Human Sync Gates (exactly 3)
+### Human Sync Gates (exactly 2 per successful cycle)
 
 - **After Spec Critic** — Dev approves the spec before planning.
 - **After Pattern Critic** — Dev approves the diff before Scribe runs.
 - **On rejection** — Dev decides whether to retry or abandon.
 
-No other human pauses. Internal agent handoffs are automatic.
+No other human pauses. When using `/run-pipeline`, internal handoffs are automatic.
 
 ---
 
@@ -109,6 +121,10 @@ implementation_rail:
 
   - step: unit_tests
     description: Run the full test suite. Post verbatim output on any failure.
+    block_on_failure: true
+
+  - step: explain_test_changes
+    description: For every pre-existing test file in the diff, emit a per-file reason citing the implementation step or pattern change that required the modification. New test files are exempt. Block if a modified test has no documented reason.
     block_on_failure: true
 
   - step: complexity_check
@@ -210,6 +226,7 @@ The Pattern Critic **fails loudly** if the wiki is missing. It does not silently
     "lint": "pending | done | failed",
     "type_check": "pending | done | failed",
     "unit_tests": "pending | done | failed",
+    "explain_test_changes": "pending | done | failed",
     "complexity_check": "pending | done | failed",
     "wiki_pattern_check": "pending | done | failed",
     "submit_for_pattern_critic": "pending | done | failed"
@@ -240,13 +257,16 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 
 ---
 
-## Prompt Inventory (3 total)
+## Prompt Inventory (6 total)
 
 | Prompt | Owns | Forbidden from |
 |---|---|---|
+| `/run-pipeline` | Chaining all pipeline steps; pausing at gates | Adding reasoning beyond what each step defines |
 | `/refine-requirements` | Writing `requirements.md` | Making code changes |
 | `/create-implementation-plan` | Writing `implementation-plan.md` | Writing final code |
 | `/implement-plan` | Writing code + tests, following the YAML rail | Modifying the plan or requirements |
+| `/create-mr-description` | Generating a structured MR description from requirements + plan + diff | Editing any source file |
+| `/explain-changes` | Answering questions about why specific changes were made, citing plan + diff | Speculating beyond documented sources |
 
 ---
 

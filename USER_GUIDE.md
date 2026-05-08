@@ -46,7 +46,12 @@ Budget 30–60 minutes. This is a one-time cost and pays for itself on the first
 
 Use this flow for any behavioral change — a feature, a non-trivial fix, anything that needs a test.
 
-There is no orchestrator agent. You drive the pipeline directly by invoking each step in order. This keeps the flow transparent and removes a layer of indirection that adds no intelligence.
+You can drive the pipeline in two ways:
+
+- **Manual** — invoke each step yourself in the order shown below. Useful when you want to inspect or redirect between steps.
+- **Auto** — run `/run-pipeline` once. It chains all steps automatically and pauses only at the two human sync gates, asking "approve" before moving past each gate.
+
+The steps and gates are identical in both modes.
 
 ### Step 1 — Refine
 
@@ -90,9 +95,10 @@ This follows the **YAML rail** step-by-step. Every step hard-blocks on failure �
 5. lint *(hard block on any error)*
 6. **type_check** *(tsc --noEmit / mypy — hard block on any error)*
 7. **unit_tests** *(hard block — posts verbatim failure output)*
-8. complexity_check (runs `#code-analyzer`, threshold 15)
-9. wiki_pattern_check
-10. submit → `@pattern-critic`
+8. **explain_test_changes** *(hard block — modified existing tests require a per-file reason citing the plan)*
+9. complexity_check (runs `#code-analyzer`, threshold 15)
+10. wiki_pattern_check
+11. submit → `@pattern-critic`
 
 The implementer reports every step. The pattern critic verifies the report against the rail before approving.
 
@@ -107,7 +113,15 @@ Reads the diff against `.wiki/PATTERNS.md`, `DEPENDENCIES.md`, and `API.md`, ver
 - **APPROVED** → pause for your approval, then continue.
 - **REJECTED** → the critic lists the specific fixes in order. Re-run `/implement-plan` until the diff passes.
 
-### Step 6 — Scribe
+### Step 6 — MR Description (optional)
+
+```
+/create-mr-description
+```
+
+Reads `requirements.md`, `implementation-plan.md`, and the git diff, then produces a structured MR description ready to paste into your PR. Run this after Gate 2 approval and before Scribe. Skip it if you prefer to write the description yourself.
+
+### Step 7 — Scribe
 
 ```
 @scribe
@@ -150,9 +164,12 @@ Everything in SemiPilot Pro is designed to be useful in isolation.
 
 | Prompt | Use on its own when… |
 |---|---|
+| `/run-pipeline` | You want to start a full cycle and let the system handle all handoffs. It pauses at Gate 1 and Gate 2 for your approval; everything else is automatic. |
 | `/refine-requirements` | Shortest path to a clean spec. Identical to invoking `@refiner`. |
 | `/create-implementation-plan` | You have an approved spec from any source (including hand-written) and want a plan without running Gate 1. |
 | `/implement-plan` | You already have a plan and want code written under the YAML rail — tests first, type-checked, linted, complexity-checked. |
+| `/create-mr-description` | After Gate 2 approval, generates a structured MR description (What / Why / Changes / Tests / Acceptance Criteria / Risks / Notes for Reviewer) ready to paste into your PR. |
+| `/explain-changes` | Ask a specific question about why a file, function, or test was changed. Answers cite `requirements.md`, `implementation-plan.md`, or the diff — no speculation. |
 
 ### Skills
 
@@ -271,8 +288,7 @@ Delete `.github/implementation-progress.json`. The next `/implement-plan` run wi
 
 - No shadow production traffic verification (that's CI/CD, not an IDE tool).
 - No cross-repo orchestration.
-- No automatic PR creation or merging — you still drive git.
-- No orchestrator agent. Five agents, two sync gates, one rail. Dev drives.
+- No automatic PR creation or merging — `/create-mr-description` generates the description; you open the PR.
 
 If you want any of the removed capabilities from legacy `semiPilot/`, run both systems in parallel. They don't conflict.
 

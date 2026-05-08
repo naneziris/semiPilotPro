@@ -47,6 +47,20 @@ At the start of every run:
 
 `.github/implementation-progress.json` — see `semipilot-core.md` § Ephemeral Artifacts for the full schema.
 
+# SCOPE DISCIPLINE
+
+The plan is the boundary. You implement exactly what it specifies — no more, no less.
+
+**Only touch files listed in `Files to Change`.** If making a test pass requires editing a file not in that list, stop and report it. Do not expand scope silently.
+
+**Do not improve code that is not in scope.** If you notice something outside the plan that looks wrong, messy, or improvable — log it as a flag in the IMPLEMENTER REPORT and leave it alone. Do not refactor it, rename it, reformat it, or add a comment about it.
+
+**Do not fix unrelated issues opportunistically.** Lint errors, type errors, or style violations in files the plan does not touch are not your problem in this cycle. If the linter or type checker surfaces an error in an out-of-scope file, stop and report it rather than fixing it.
+
+**Do not add anything the plan is silent about.** No extra logging, no defensive null checks beyond what the tests require, no helper utilities, no convenience methods. If the plan does not mention it, it does not belong in the diff.
+
+If you find yourself touching something the plan does not mention, stop. Either the plan is incomplete (report it and ask Dev) or you are drifting out of scope (stop and correct course).
+
 # THE YAML RAIL (execute in order)
 
 ## Step 1: read_plan
@@ -99,7 +113,18 @@ At the start of every run:
   Do not proceed to step 8. Do not attempt a silent fix and re-run without reporting.
 - → Checkpoint: mark `unit_tests` as `"done"` on pass, `"failed"` on hard block (record test failure output in `failure_output`).
 
-## Step 8: complexity_check
+## Step 8: explain_test_changes
+- Examine the diff for every test file (matching `*.test.*`, `*_test.*`, or `*spec*`) that was **modified** (not newly created).
+- For each modified test file, produce an entry in this format:
+  ```
+  Modified test: <path>
+  Reason: <why this existing test needed to change — cite the specific implementation step or pattern change that required it>
+  ```
+- **Block:** if any pre-existing test file was modified and you cannot name a specific reason from the plan or a wiki pattern change, stop and report: "Modified test `<path>` has no documented reason. Explain why this test was changed before proceeding."
+- If no pre-existing test files were modified, write: "No existing tests were modified."
+- → Checkpoint: mark `explain_test_changes` as `"done"`.
+
+## Step 9: complexity_check
 - Run `#code-analyzer` on each file you modified.
 - Threshold: no function may exceed cyclomatic complexity 15 unless marked with a `# complexity-exempt: <reason>` comment.
 - If a function exceeds 15, refactor it before proceeding — unless the plan explicitly authorizes the complexity.
@@ -107,13 +132,13 @@ At the start of every run:
 - Report: complexity results per file.
 - → Checkpoint: mark `complexity_check` as `"done"` (this step does not hard-block — always `"done"` regardless of flags).
 
-## Step 9: wiki_pattern_check
+## Step 10: wiki_pattern_check
 - Re-read `.wiki/PATTERNS.md`.
 - For each file you changed, verify naming, DI, error handling, and test style match.
 - **Block:** on any deviation you cannot justify by citing a specific pattern in the wiki.
 - → Checkpoint: mark `wiki_pattern_check` as `"done"`.
 
-## Step 10: submit_for_pattern_critic
+## Step 11: submit_for_pattern_critic
 - Produce the handoff report (format below).
 - → Checkpoint: mark `submit_for_pattern_critic` as `"done"`.
 - Stop. Dev invokes `@pattern-critic`.
@@ -134,6 +159,7 @@ YAML rail execution:
 - lint: pass
 - type_check: pass | skipped (<reason>) | blocked — <error summary>
 - unit_tests: pass — <N/N passing>
+- explain_test_changes: <"No existing tests were modified." | list of modified tests with reasons>
 - complexity_check: pass | flagged — <per-file summary>
 - wiki_pattern_check: pass
 - submit_for_pattern_critic: ready

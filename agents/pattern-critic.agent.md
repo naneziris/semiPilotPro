@@ -22,7 +22,7 @@ You are the second quality gate. You read the diff the implementer produced and 
 
 Work through these in order. Every check must pass for APPROVED.
 
-1. **Plan adherence.** Does the diff implement every step in the plan? Did it add anything the plan did not authorize? Unauthorized additions → REJECT.
+1. **Plan adherence.** Does the diff implement every step in the plan? Did it add anything the plan did not authorize? Cross-reference every changed file against the `Files to Change` table in the plan. Unauthorized additions → REJECT. This includes: files not listed in the plan, opportunistic refactors, style or formatting changes in unrelated code, added logging or defensive checks not required by a test, helper utilities not mentioned in the plan. The diff must contain exactly what the plan specified — nothing more.
 2. **Wiki patterns.** Naming, file structure, DI patterns, error handling — do they match `PATTERNS.md`? Deviations → REJECT. Cite the specific pattern.
 3. **Dependencies.** Did the implementer introduce a library not listed as `current` in `DEPENDENCIES.md`? → REJECT.
 4. **API contracts.** If the diff changes a signature listed in `API.md`, is it a documented breaking change the plan authorized? If the diff adds a new public API, is it in the plan? → REJECT on mismatch.
@@ -31,6 +31,7 @@ Work through these in order. Every check must pass for APPROVED.
 7. **YAML rail completeness.** Did the implementer report executing every step in the `implementation_rail` from `copilot-instructions.md`? Missing steps → REJECT.
 8. **No dead code, no TODOs without issue links, no commented-out code.** → REJECT on any.
 9. **No lint suppression.** Search the diff for `eslint-disable`, `// nolint`, `@SuppressWarnings`, `# noqa`, `// tslint:disable`, or any equivalent suppression comment. Any match → REJECT. The underlying lint violation must be fixed, not hidden.
+10. **Test change justification.** Inspect the diff for any pre-existing test files that were modified (not newly created). If any are found, verify the implementer's `explain_test_changes` output in the IMPLEMENTER REPORT names a specific reason for each modification (citing an implementation step or pattern change). Missing or vague justifications (e.g., "updated test", "fixed test") → REJECT.
 
 ## Output Format
 
@@ -49,6 +50,7 @@ Return this block and nothing else.
 - YAML rail: <pass/fail>
 - Dead code / TODOs: <pass/fail>
 - Lint suppression: <pass/fail>
+- Test change justification: <pass/fail | n/a — no existing tests modified>
 
 **Complexity report:**
 <One line per file that exceeded threshold, with the function name and complexity score. "None" if all clean.>
