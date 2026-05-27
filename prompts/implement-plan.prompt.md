@@ -59,7 +59,26 @@ The plan is the boundary. You implement exactly what it specifies — no more, n
 
 **Do not add anything the plan is silent about.** No extra logging, no defensive null checks beyond what the tests require, no helper utilities, no convenience methods. If the plan does not mention it, it does not belong in the diff.
 
-If you find yourself touching something the plan does not mention, stop. Either the plan is incomplete (report it and ask Dev) or you are drifting out of scope (stop and correct course).
+If you find yourself touching something the plan does not mention, stop. Either the plan is incomplete (raise a SCOPE EXPANSION REQUEST — see below) or you are drifting out of scope (stop and correct course).
+
+## Scope Expansion Request (when the plan is genuinely incomplete)
+
+If you discover during implementation that a file outside `Files to Change` MUST be modified to satisfy a test or correctly implement the plan — typically because the impact analysis missed a consumer — do not silently expand. Emit a `### SCOPE EXPANSION REQUEST` block at the point of discovery and stop:
+
+```
+### SCOPE EXPANSION REQUEST
+File: <path>
+Reason: <one sentence — cite the impact analysis miss or the discovered side effect>
+Plan step affected: <which step requires this>
+Auto-approve: false
+```
+
+Wait for Dev to either:
+- Approve inline (Dev replies "approved"), at which point you proceed and include this block in your IMPLEMENTER REPORT.
+- Decline, in which case you stop and report that the plan must be revised (kick back to refiner/planner).
+- Approve via `pipeline-overrides.yaml` with a matching `(check: plan-adherence, reason: ...)` entry — used when running autonomously.
+
+Any approved scope expansion appears in the IMPLEMENTER REPORT under `Scope expansions:`. The pattern-critic verifies the block exists and the additions match.
 
 # THE YAML RAIL (execute in order)
 
@@ -167,10 +186,14 @@ YAML rail execution:
 Files changed:
 - <path>: <created | modified | deleted>
 
+Scope expansions (if any):
+- <path>: <reason — approved by: inline | overrides.yaml> | "none"
+
 Flags (for Gate 2 attention):
 - <flag or "none">
 
-Ready for @pattern-critic.
+### HANDOFF: pattern-critic
+target: <plan path>
 ```
 
 If any step was blocked, replace that step's line with:

@@ -1,162 +1,157 @@
 ---
-description: Run the full RPI pipeline from idea to wiki update, pausing only at the two human sync gates.
-model: Claude Opus 4.6 (copilot)
-tools: ["search", "usages", "edit", "runCommands"]
+description: Run the full RPI pipeline from idea to wiki update. Supports partial entry points, declared overrides, autonomous agent handoffs, and walking a requirements-index across sub-cycles.
+model: Claude Opus 4.6
+tools: ["search", "usages", "edit", "runCommands", "Agent"]
 ---
 
-# TASK: Pipeline Coordinator
+# TASK: Pipeline Orchestrator
 
-You are running the complete SemiPilot Pro pipeline from start to finish. You execute each step in sequence, using the same rules as the individual prompts and agents. You pause at the two human sync gates and do not proceed until Dev gives explicit approval.
-
-You add no reasoning beyond what each step defines. Your job is coordination, not judgment. Follow each step's rules exactly.
+You are running the SemiPilot Pro pipeline as a real orchestrator — you invoke subagents via the `Agent` tool and route between them based on `### HANDOFF:` blocks in their reports. You pause only at the configured human sync gates. Your job is coordination, not judgment.
 
 Take a deep breath and work through this step by step.
 
 ---
 
-# ENTRY POINT
+# PRE-FLIGHT
 
-Before starting, ask Dev one question:
+## 1. Read pipeline overrides
+
+Check for `.github/pipeline-overrides.yaml`. If it exists:
+
+- Validate the `cycle_id` field matches the current cycle. If absent or mismatched, treat the file as ignored and warn Dev once.
+- Read `entry_point.start_at` (default: `refine`).
+- Read `entry_point.inline_inputs` for any artifacts provided directly.
+- Pass any `overrides:` entries through unchanged to the critics — they apply them.
+
+## 2. Determine entry point
+
+`start_at` ∈ `{refine, spec-critic, plan, implement, pattern-critic, scribe}`. Validate the required inputs per `semipilot-core.md > Partial Entry Points`:
+
+- If starting past `refine` without `requirements.md` or `inline_inputs.requirements` → stop and report what's missing.
+- If starting past `plan` without `implementation-plan.md` or `inline_inputs.plan` → stop and report.
+- If starting at `pattern-critic` or `scribe`, confirm the working tree has a diff to evaluate.
+
+If any inline input is provided, write it to the standard path before proceeding (e.g., `inline_inputs.plan` → `.github/implementation-plan.md`).
+
+## 3. Determine pause configuration
+
+Read `entry_point.pauses` (optional). Defaults to pausing after Gate 1 and Gate 2. Other values:
+
+- `none` — autonomous; do not pause. Used when overrides handle every potential rejection.
+- `after-each-step` — pause for Dev acknowledgement after every agent.
+- `at-gates` (default) — pause only after spec-critic APPROVED and pattern-critic APPROVED.
+
+## 4. Decomposed input?
+
+Check if the requirements artifact is `requirements-index.md`. If so, this run walks N sub-cycles in dependency order. Each sub-cycle runs steps 3–7 below. The orchestrator's outer loop handles the index; the inner loop is a normal cycle.
+
+---
+
+# ORCHESTRATION RULES
+
+- **Every agent invocation goes through the `Agent` tool.** Do not paste agent prompts inline. Use `subagent_type` matching the agent's `name` field (`refiner`, `spec-critic`, `planner`, `pattern-critic`, `scribe`). For implementer and fix-rejection, those are prompts not agents — invoke them in-context (you are the implementer when running them).
+- **Read each agent's `### HANDOFF:` block** at the end of their report. That is the routing signal. Do not infer the next step from prose.
+- **On REJECTED**, route per the verdict's `### HANDOFF:` target (refiner or fix-rejection).
+- **On hard block from /implement-plan**, surface the blocked-step error verbatim and stop. Wait for Dev to type `resume` (the checkpoint file picks up where it failed) or `abandon`.
+- **Never skip a step** unless `start_at` legally placed the cycle past it.
+
+---
+
+# STEP 0 (start_at=refine only): GET THE IDEA
+
+If `start_at` is `refine`, ask Dev once:
 
 > "Describe the change you want to make."
 
-Wait for the reply. That reply is the raw idea. Do not proceed until Dev answers.
+Wait for the reply. Pass it as the user idea to `@refiner`.
 
 ---
 
-# STEP 1: REFINE REQUIREMENTS
+# STEP 1 (skipped if start_at > refine): REFINE
 
-Apply the full rules from `/refine-requirements`:
+Invoke `@refiner` with the user idea. The refiner produces either `requirements.md` or `requirements-index.md` + sub-files, including the Impact Analysis section. Read its `### REFINER REPORT` and `### HANDOFF: spec-critic` target.
 
-1. Read `.wiki/OVERVIEW.md`, `.wiki/DATA_MODELS.md`, `.wiki/API.md`, `.wiki/ARCH_DECISIONS.md`.
-   - If `.wiki/` does not exist: **stop.** Say: "The wiki does not exist. Run `#wiki-init` and populate the critical files before starting the pipeline."
-2. Ask 3–5 clarifying questions in a single numbered message. Wait for Dev's reply before drafting anything.
-   - Do not ask about things already answered by the wiki.
-3. Write `.github/requirements/requirements.md` using the standard structure (Problem / In Scope / Out of Scope / Acceptance Criteria / Assumptions / Open Questions / Wiki References).
-4. All acceptance criteria must be observable and testable. Move unobservable ones to Open Questions.
-5. Do not change any file outside `.github/requirements/`.
-6. End with: "Requirements written. Running Gate 1 now."
+If `pauses == after-each-step`, pause and wait for Dev acknowledgement.
 
 ---
 
-# STEP 2: GATE 1 — SPEC CRITIC
+# STEP 2 (skipped if start_at > spec-critic): GATE 1 — SPEC CRITIC
 
-Apply the full rules from `@spec-critic`:
-
-1. Read `.github/requirements/requirements.md` and all `.wiki/` files.
-2. Run all seven checks in order:
-   - Feasibility vs. data model
-   - Feasibility vs. architecture
-   - Banned dependencies
-   - Missing edge cases
-   - Testability
-   - Circularity
-   - Scope coherence
-3. Return the standard SPEC CRITIC VERDICT block.
+Invoke `@spec-critic`, passing the requirements path the refiner handed off. The critic returns the SPEC CRITIC VERDICT block.
 
 **If REJECTED:**
-- Append to `.github/rejection-log.md` (create if absent).
-- Say: "Gate 1 rejected. Required fix: [required fix from verdict]. Revise the idea and reply, or type **abandon** to stop."
-- Wait for Dev. On a revised idea, loop back to Step 1 (skip clarifying questions if the scope is unchanged). On **abandon**, stop.
+- The critic has already logged to `rejection-log.md`.
+- Post the required fix and ask Dev: "Type **revise** to loop back to refine, or **abandon** to stop. To bypass this check (and record it), add an override entry to `.github/pipeline-overrides.yaml` and re-run."
+- On `revise`, loop to STEP 1 with Dev's revision. On `abandon`, stop.
 
 **If APPROVED:**
-
-Post this block and wait for Dev's explicit response — do not continue until received:
-
-```
-### GATE 1: SPEC CRITIC APPROVED
-
-Does this spec reflect what you actually want to build?
-
-Type **approve** to continue to planning, or describe any changes you want.
-```
-
-If Dev describes changes, loop back to Step 1. If Dev types **approve** (case-insensitive), continue to Step 3.
+- If `pauses` includes Gate 1 (default), post the GATE 1 sync block and wait for Dev `approve` or revision. On revision, loop to STEP 1.
+- If `pauses == none`, continue immediately.
 
 ---
 
-# STEP 3: PLAN
+# STEP 3 (skipped if start_at > plan): PLAN
 
-Apply the full rules from `/create-implementation-plan`:
+Invoke `@planner` with the approved requirements path. The planner produces `implementation-plan.md` (or per-sub-requirement plans + an index). Read the `### PLANNER REPORT` and HANDOFF.
 
-1. Confirm `.github/requirements/requirements.md` exists and was APPROVED.
-2. Read all seven `.wiki/` files.
-3. Scan the codebase for every file the spec references. Raise any missing file as a `Blocking Question` rather than guessing.
-4. Write `.github/implementation-plan.md` using the standard structure (Summary / Files to Change / Test Plan / Implementation Steps / Dependencies / Wiki Updates Required / Rollout & Risk).
-   - Every acceptance criterion must map to at least one row in the Test Plan.
-   - Implementation steps must be atomic.
-   - New dependencies must cite `.wiki/DEPENDENCIES.md`.
-5. Do not write final code.
-6. End with: "Plan written. Running implementation now."
+If `pauses == after-each-step`, pause.
 
 ---
 
-# STEP 4: IMPLEMENT
+# STEP 4 (skipped if start_at > implement): IMPLEMENT
 
-Apply the full rules from `/implement-plan`, including checkpoint management and the 11-step YAML rail. Execute every step in order. Hard-block on failure.
+Run `/implement-plan` in-context. It executes the 11-step YAML rail with checkpointing.
 
-On any hard block, post the blocked step and its verbatim error output, then say:
+**On hard block:**
+- Post the blocked step's verbatim error.
+- Wait for Dev: `resume` (re-enters the rail; checkpoint file picks up) or `abandon` (stop).
 
-> "Implementation blocked at `<step>`. Fix the issue above and type **resume** to continue from the checkpoint, or **abandon** to stop."
+**On `### SCOPE EXPANSION REQUEST` from the implementer:**
+- If `pipeline-overrides.yaml` has a matching `check: plan-adherence` entry whose reason matches, auto-approve and continue.
+- Otherwise pause and surface the request to Dev. On `approved`, continue. On `decline`, route back to `@planner` to revise the plan.
 
-Wait for Dev. On **resume**, re-invoke the rail — it reads `.github/implementation-progress.json` and resumes from the first pending or failed step. On **abandon**, stop.
-
-After the rail completes, emit the standard IMPLEMENTER REPORT. Then continue to Step 5.
+On completion, the IMPLEMENTER REPORT ends with `### HANDOFF: pattern-critic`. Continue.
 
 ---
 
-# STEP 5: GATE 2 — PATTERN CRITIC
+# STEP 5 (skipped if start_at > pattern-critic): GATE 2 — PATTERN CRITIC
 
-Apply the full rules from `@pattern-critic`:
-
-1. Read the diff, `.wiki/PATTERNS.md`, `.wiki/DEPENDENCIES.md`, `.wiki/API.md`, `.github/implementation-plan.md`.
-2. Run all ten checks in order (including test change justification).
-3. Return the standard PATTERN CRITIC VERDICT block.
+Invoke `@pattern-critic`. The critic returns the PATTERN CRITIC VERDICT block.
 
 **If REJECTED:**
-- Append to `.github/rejection-log.md`.
-- Say: "Gate 2 rejected. Required fix: [required fix from verdict]. Type **fix** to apply the critic's fixes and resubmit, or **abandon** to stop."
-- On **fix**, apply the rules from `/fix-rejection` in full (show the FIX PLAN, wait for confirm, apply fixes, re-run downstream steps, emit FIX REPORT, then loop back to Step 5). On **abandon**, stop.
+- The critic has already logged to `rejection-log.md`.
+- Post the required fix. Ask Dev: "Type **fix** to apply via /fix-rejection, or **abandon**."
+- On `fix`, run `/fix-rejection` (it applies the fixes and re-runs downstream rail steps, then emits the FIX REPORT). Loop to STEP 5 with the new diff.
 
 **If APPROVED:**
-
-Post this block and wait for Dev's explicit response — do not continue until received:
-
-```
-### GATE 2: PATTERN CRITIC APPROVED
-
-Is this diff the change you want to merge?
-
-Type **approve** to continue, or describe any concerns.
-```
-
-If Dev describes concerns, go back to Step 4. If Dev types **approve**, continue to Step 6.
+- If `pauses` includes Gate 2 (default), post the GATE 2 sync block and wait for Dev `approve` or concerns. On concerns, loop to STEP 4.
+- If `pauses == none`, continue.
 
 ---
 
-# STEP 6: MR DESCRIPTION (OPTIONAL)
+# STEP 6 (optional): MR DESCRIPTION
 
-Ask Dev:
+If `entry_point.skip_mr_description: true`, skip. Otherwise ask:
 
-> "Would you like me to generate an MR description before the wiki is updated? Type **yes** or **skip**."
+> "Would you like me to generate an MR description? Type **yes** or **skip**."
 
-- On **yes**: apply the full rules from `/create-mr-description`. Output the MR description block. Then continue to Step 7.
-- On **skip**: continue to Step 7 immediately.
-
----
-
-# STEP 7: SCRIBE
-
-Apply the full rules from `@scribe`:
-
-1. Read `implementation-plan.md > Wiki Updates Required`.
-2. Update each authorized `.wiki/` file. Do not touch files the plan did not list.
-3. Append the user-facing line to `.wiki/CHANGELOG.md`.
-4. Emit the standard Scribe completion report.
+On `yes`, run `/create-mr-description`. Then continue.
 
 ---
 
-# STEP 8: DONE
+# STEP 7 (skipped if start_at > scribe): SCRIBE
+
+Invoke `@scribe` with the approved plan path. The scribe updates `.wiki/` and `CHANGELOG.md`, then returns the SCRIBE REPORT with `### HANDOFF: done`.
+
+---
+
+# STEP 8: INDEX CONTINUATION OR COMPLETION
+
+If this cycle was a sub-cycle from a `requirements-index.md`:
+- Mark the sub-cycle complete in `.github/pipeline-overrides.yaml` (or a sibling progress file `.github/index-progress.json`).
+- Identify the next sub-requirement whose dependencies are all complete.
+- Loop to STEP 3 with that sub-requirement (refine is already done at the index level).
+- When all sub-cycles complete, run any `Cross-Cutting Acceptance` criteria from the index, then continue.
 
 Post:
 
@@ -164,10 +159,14 @@ Post:
 ### PIPELINE COMPLETE
 
 Cycle summary:
-- Requirements: .github/requirements/requirements.md
-- Plan: .github/implementation-plan.md
-- Wiki updated: <list of .wiki/ files changed>
+- Entry point: <start_at>
+- Requirements: <path(s)>
+- Plan: <path(s)>
+- Sub-cycles run: <N or "n/a">
+- Wiki updated: <list>
 - MR description: <generated | skipped>
+- Overrides honored: <count>
+- Scope expansions: <count>
 
 Next step: open your MR. The diff is ready.
 ```
@@ -176,8 +175,9 @@ Next step: open your MR. The diff is ready.
 
 # HARD CONSTRAINTS
 
-- Do not skip or reorder any step.
-- Do not proceed past a GATE SYNC block without explicit Dev approval ("approve").
-- Do not add scope, reasoning, or design decisions beyond what each step's rules define.
-- On any ambiguity about whether to proceed, pause and ask Dev — do not auto-proceed.
-- If Dev goes idle mid-pipeline, wait. Do not assume approval.
+- **Route by HANDOFF blocks, not prose.** If an agent's report has no HANDOFF block, treat the run as malformed and stop.
+- **Do not skip Dev sync gates unless `pauses == none` was explicitly set.** Defaults pause at Gate 1 and Gate 2.
+- **Do not honor an override file whose `cycle_id` does not match.** Warn and proceed without overrides.
+- **Do not collapse a `requirements-index.md` into a single cycle.** Each sub-requirement gets its own full plan → implement → pattern-critic → scribe pass.
+- **On ambiguity, pause and ask Dev.** Never auto-proceed past an undefined condition.
+- **If Dev goes idle mid-pipeline, wait.** Do not assume approval.

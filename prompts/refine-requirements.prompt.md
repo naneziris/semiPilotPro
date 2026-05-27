@@ -23,6 +23,8 @@ Before you ask any questions, read these files if they exist:
 
 If `.wiki/` does not exist, stop and report: "The wiki does not exist. Run `#wiki-init` before refining requirements." Do not proceed.
 
+If `.wiki/PATTERNS.md` is empty and the codebase is non-empty, also stop and report: "Run `#patterns-seed` to seed PATTERNS.md before proceeding. Otherwise the pattern-critic will reject every diff."
+
 ## 2. Ask 3–5 clarifying questions
 
 Post all questions in a single numbered message. Do not send them one at a time — wait for one answer before asking the next. Wait for the user's reply before drafting. Never ask more than five. Typical areas:
@@ -34,9 +36,31 @@ Post all questions in a single numbered message. Do not send them one at a time 
 
 Do not ask questions whose answers are already in the wiki. That is a waste of the user's time.
 
-## 3. Draft `.github/requirements/requirements.md`
+## 3. Run impact analysis BEFORE drafting
 
-Use this exact structure:
+For every symbol, file, or pattern the user wants to change:
+- Use `search` and `usages` to find every reference.
+- List **consumers** — callers, subscribers, mockers — with the file paths.
+- List **side-effect surfaces** — state, context providers, event handlers, lifecycle hooks, `useEffect`-style hooks, subscriptions.
+- List **tests** that exercise the touched surface.
+- Rate breakage risk per consumer (low / medium / high).
+
+If you cannot find references for a symbol the user clearly intends to change, that is itself a finding — record it as `Confidence: low` and list the unknown in `Open Questions`.
+
+**The goal is to find the files you didn't know you would touch.** Skipping this step is how refactors miss side effects.
+
+## 4. Decomposition check
+
+Apply the policy from `semipilot-core.md > Decomposition Policy`. If **any** trigger holds (more than 5 files, more than 2 architectural boundaries, introduces a new pattern, modifies a shared API consumed by more than 3 call sites), decompose into:
+
+- `.github/requirements/requirements-index.md` — index file using the schema in `semipilot-core.md`.
+- `.github/requirements/NN-<slug>.md` — one file per sub-requirement, each independently passable through Gate 1.
+
+Otherwise produce a single `requirements.md`.
+
+## 5. Draft the file(s)
+
+Use this exact structure for each requirement file:
 
 ```markdown
 # Requirement: <short title>
@@ -50,6 +74,23 @@ Use this exact structure:
 ## Out of Scope
 - <bullet>
 
+## Impact Analysis
+**Symbols / modules the change touches:**
+- `<file or symbol>` — current responsibility — what changes
+
+**Consumers:**
+| Consumer | File | How it depends | Breakage risk |
+|---|---|---|---|
+| `<name>` | `<path>` | <reads X / calls Y / mocks Z> | low / medium / high |
+
+**Tests that exercise the touched surface:**
+- `<test file>` — covers <which behavior>
+
+**Side-effect surfaces:**
+- <state, context, event handlers, lifecycle hooks; or "none">
+
+**Confidence:** <high | medium | low>
+
 ## Acceptance Criteria
 1. <Given … When … Then …>
 2. <...>
@@ -58,29 +99,36 @@ Use this exact structure:
 - <any assumption this spec depends on>
 
 ## Open Questions
-- <question — default: <your best guess, to be overridden if Dev disagrees>>
+- <question — default: <your best guess>>
 
 ## Wiki References
 - Reads from: <list>
 - Writes to: <list — what @scribe will need to update if this lands>
 ```
 
-## 4. Acceptance criteria must be observable
+## 6. Acceptance criteria must be observable
 
 "The code is well-structured" is not a criterion. "A POST to `/users` with an empty email field returns 400 with `{error: 'email required'}`" is.
 
 If you cannot make a criterion observable, move it to `Open Questions`.
 
-## 5. Do not make code changes
+## 7. Do not make code changes
 
 You may not edit any file outside `.github/requirements/`. If you catch yourself about to change code, stop.
 
-## 6. Exit
+## 8. Exit
 
 End with:
 
 ```
-Requirements written to .github/requirements/requirements.md. Ready for @spec-critic.
+### REFINER REPORT
+Output:
+- <path to requirements.md OR requirements-index.md + sub-files>
+Decomposition: <single | index with N sub-requirements>
+Impact analysis confidence: <high | medium | low>
+
+### HANDOFF: spec-critic
+target: <path to the requirements file the critic must evaluate first>
 ```
 
-Then stop. Do not invoke the critic yourself — Dev runs `@spec-critic` next.
+Then stop. Do not invoke the critic yourself — Dev (or `/run-pipeline`) runs `@spec-critic` next.

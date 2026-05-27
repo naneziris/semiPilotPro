@@ -24,6 +24,7 @@ Copilot operates as a **senior engineering collaborator**, not a tool or assista
 3. **Critics block the pipeline — they do not "suggest."** A Spec Critic rejection means planning does not start. A Pattern Critic rejection means the diff does not merge.
 4. **Dev and Copilot are colleagues.** Disagree clearly and briefly when Dev's idea is wrong. No sycophancy. No hedging.
 5. **One change per RPI cycle.** Do not bundle unrelated work into a single requirements document.
+6. **Surface pattern conflicts — don't average them.** If two existing patterns contradict, name both, pick the more recent or more tested one, and explain why. Flag the other for cleanup in `ARCH_DECISIONS.md`. Do not silently split the difference.
 
 ---
 
@@ -104,7 +105,10 @@ implementation_rail:
     block_on_failure: true
 
   - step: write_tests_first
-    description: Write failing tests for each acceptance criterion in the plan.
+    description: >
+      Write failing tests for each acceptance criterion in the plan.
+      Each test must encode WHY the behavior matters, not just WHAT it does.
+      A test that cannot fail when the business logic it guards changes is wrong.
     block_on_failure: true
 
   - step: write_code
@@ -180,9 +184,11 @@ If `.wiki/` does not exist, the first step of any non-trivial task is:
 #wiki-init
 ```
 
-`wiki-init` scaffolds the seven files from templates and seeds `OVERVIEW.md` and `DATA_MODELS.md` from `package.json` / `pyproject.toml` / detected schema files. All other wiki content is added by `@scribe` as features land.
+`wiki-init` scaffolds the seven files from templates and seeds `OVERVIEW.md` and `DATA_MODELS.md` from `package.json` / `pyproject.toml` / detected schema files.
 
-The Pattern Critic **fails loudly** if the wiki is missing. It does not silently pass.
+On a **non-empty codebase**, run `#patterns-seed` immediately after `#wiki-init`. It infers naming conventions, DI patterns, error-handling styles, and test conventions from the existing code and writes them to `PATTERNS.md`. Without this, the Pattern Critic has nothing to enforce on the first cycle and will either reject every diff or be commented out — both failure modes. Seeded patterns are best-effort; `@scribe` refines them as features land.
+
+The Pattern Critic **fails loudly** if `PATTERNS.md` is empty. It does not silently pass.
 
 ---
 
@@ -197,6 +203,7 @@ The Pattern Critic **fails loudly** if the wiki is missing. It does not silently
 |---|---|---|
 | `.github/rejection-log.md` | Critics (`@spec-critic`, `@pattern-critic`) | Append-only log of every REJECTED verdict. Written by the critic that issued the rejection. `@scribe` reads it when writing `CHANGELOG.md` to summarize rejection patterns across a release. |
 | `.github/implementation-progress.json` | `/implement-plan` | Checkpoint file tracking per-step status for the current implementation run. Enables resume after a blocked step. |
+| `.github/pipeline-overrides.yaml` | Dev (read by both critics and `/run-pipeline`) | Declared exceptions and partial-entry-point configuration for the current cycle. Replaces the pattern of commenting out critic checks. Every override is logged in `rejection-log.md` as an `OVERRIDDEN` entry so the bypass is recorded, not hidden. Deleted by Dev after the cycle (or set `expires_after_cycles: 1`). |
 
 **`.github/rejection-log.md` entry schema** (entries separated by `---`):
 
@@ -236,6 +243,86 @@ The Pattern Critic **fails loudly** if the wiki is missing. It does not silently
 }
 ```
 
+**`.github/pipeline-overrides.yaml` schema:**
+
+```yaml
+# All sections are optional. An absent file is equivalent to "no overrides, default entry point."
+cycle_id: <string>          # must match the current cycle; otherwise the file is ignored
+
+entry_point:
+  start_at: refine | spec-critic | plan | implement | pattern-critic | scribe
+  inline_inputs:             # provide artifacts directly when skipping the step that would have produced them
+    requirements: |
+      <inline markdown — used when start_at >= spec-critic and requirements.md does not exist>
+    plan: |
+      <inline markdown — used when start_at >= implement and implementation-plan.md does not exist>
+
+overrides:
+  - critic: spec-critic | pattern-critic
+    check: <check name, e.g. "edge-cases" | "plan-adherence" | "wiki-patterns">
+    reason: "<one-sentence justification, recorded in rejection-log.md>"
+    expires_after_cycles: 1  # how many cycles this override is valid for; default 1
+```
+
+Both critics MUST: (a) read this file before running checks, (b) treat any matching `(critic, check)` pair as `pass` for that check, (c) append an `OVERRIDDEN` entry to `rejection-log.md` recording the bypass. Overrides never silently pass — they are tracked.
+
+---
+
+## Partial Entry Points
+
+The pipeline supports starting at any step. `/run-pipeline` reads `.github/pipeline-overrides.yaml > entry_point.start_at` (default: `refine`) and skips earlier steps.
+
+| `start_at` | Skips | Requires |
+|---|---|---|
+| `refine` | nothing | a raw idea (default) |
+| `spec-critic` | refine | `requirements.md` exists OR `inline_inputs.requirements` |
+| `plan` | refine, spec-critic | APPROVED `requirements.md` OR `inline_inputs.requirements` + Dev attests to spec quality in the override file |
+| `implement` | refine, spec-critic, plan | `implementation-plan.md` exists OR `inline_inputs.plan` |
+| `pattern-critic` | everything up to implement | a diff already in the working tree |
+| `scribe` | everything up to pattern-critic | a recently-APPROVED diff (no critic re-run; assumes manual approval) |
+
+Starting past `spec-critic` without an `entry_point` override is forbidden — Dev must declare the bypass in the overrides file. This replaces the practice of commenting out checks.
+
+---
+
+## Decomposition Policy
+
+The refiner assesses change size before drafting requirements. A change is **decomposable** when **any** of the following hold:
+
+- Impact analysis identifies **more than 5 files** with non-trivial changes.
+- The change crosses **more than 2 architectural boundaries** (per `.wiki/ARCH_DECISIONS.md` or top-level package layout).
+- The change **introduces a new pattern** (a new state-management approach, new DI style, new error-handling convention).
+- The change **modifies a shared API consumed by more than 3 call sites**.
+
+When decomposable, the refiner produces:
+
+- `.github/requirements/requirements-index.md` — the index of sub-requirements with a dependency graph.
+- `.github/requirements/<NN>-<slug>.md` — one file per sub-requirement, each independently passable through Gate 1.
+
+Each sub-requirement runs its **own** RPI cycle (refine-already-done → spec-critic → plan → implement → pattern-critic → scribe). `/run-pipeline` walks the index in dependency order, pausing at gates for each sub-cycle.
+
+The index schema:
+
+```markdown
+# Requirements Index: <title>
+
+## Decomposition Rationale
+<why this was split, citing the trigger from the policy above>
+
+## Sub-Requirements
+| Order | File | Title | Depends on | Estimated files |
+|---|---|---|---|---|
+| 1 | 01-<slug>.md | <title> | — | <N> |
+| 2 | 02-<slug>.md | <title> | 1 | <N> |
+
+## Cross-Cutting Acceptance
+<criteria that only make sense across the whole set, run after all sub-cycles>
+
+## Combined Wiki References
+- Reads from: <files>
+- Writes to: <files>
+```
+
 ---
 
 ## Agent Inventory (5 total)
@@ -271,11 +358,12 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 
 ---
 
-## Skill Inventory (4 total)
+## Skill Inventory (5 total)
 
 | Skill | Purpose |
 |---|---|
 | `#wiki-init` | Scaffold `.wiki/` on first use |
+| `#patterns-seed` | Infer naming, DI, error-handling, and test conventions from an existing codebase and seed `PATTERNS.md`. Required for adopting SemiPilot Pro on a non-empty repo. |
 | `#llm-wiki` | Concatenate wiki + codebase for long-context reads (FAISS optional) |
 | `#code-analyzer` | Cyclomatic complexity + file-level deltas, JSON output |
 | `#project-map` | Monorepo package + dependency map |
@@ -292,6 +380,7 @@ All skills support `--dry-run`. All skill folder names match their YAML `name`.
 4. **Dry Run** — every `run.py` supports `--dry-run` with no side effects.
 5. **Complexity Ceiling** — no function above cyclomatic complexity 15 without an explicit `# complexity-exempt:` comment explaining why.
 6. **Wiki Before Merge** — a change that touches architecture, data models, public APIs, or dependencies is **not complete** until `@scribe` has updated the corresponding `.wiki/` file.
+7. **Simplicity First** — write the minimum code that satisfies the acceptance criteria. No speculative abstractions, no single-use design patterns, no scope beyond the plan. If an abstraction serves only one call site today, it does not belong.
 
 ---
 

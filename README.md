@@ -1,43 +1,22 @@
 # SemiPilot Pro
 
-An agentic software development system for GitHub Copilot in VS Code. It takes a raw idea through requirements, planning, implementation, and documentation — enforcing quality at two gated checkpoints and keeping the wiki as the team's shared memory.
+An agentic software development system for GitHub Copilot in VS Code and Claude Code. It takes a raw idea through requirements, planning, implementation, and documentation — enforcing quality at two gated checkpoints, surfacing the change's blast radius before code is written, and keeping the wiki as the team's shared memory.
 
 ---
 
 ## How it works
 
-Every change follows the same pipeline:
+![SemiPilot Pro pipeline](docs/flow.png)
 
-```
-User Idea
-  │
-  ▼  (or /run-pipeline to chain everything automatically)
-  │
-  ▼
-/refine-requirements      →  .github/requirements/requirements.md
-  │
-  ▼
-@spec-critic  (Gate 1)    →  APPROVED or REJECTED
-  │  REJECTED → fix requirements, re-run @spec-critic
-  │  APPROVED ← human approves spec
-  ▼
-/create-implementation-plan  →  .github/implementation-plan.md
-  │
-  ▼
-/implement-plan  (YAML rail) →  code + tests, 11 enforced steps
-  │
-  ▼
-@pattern-critic  (Gate 2) →  APPROVED or REJECTED
-  │  REJECTED → /fix-rejection → re-run @pattern-critic
-  │  APPROVED ← human approves diff
-  ▼
-/create-mr-description    →  structured PR description (optional)
-  │
-  ▼
-@scribe                   →  updated .wiki/ + CHANGELOG
-```
+Every change follows the same top-to-bottom pipeline. Two human decisions per successful cycle: **approve the spec** (after Gate 1) and **approve the diff** (after Gate 2). Everything else runs automatically.
 
-Two human decisions per successful cycle: approve the spec, approve the diff. Everything else runs automatically.
+**What's new in the current build:**
+
+- **Impact analysis up front.** `@refiner` traces consumers, side-effect surfaces, and tests for every symbol the change touches — before drafting acceptance criteria. Catches the kind of side effect that gets missed on a refactor.
+- **Automatic decomposition.** If a change crosses >5 files, >2 architectural boundaries, introduces a new pattern, or modifies a shared API with >3 call sites, `@refiner` emits a `requirements-index.md` + sub-files. `/run-pipeline` walks each sub-cycle through its own RPI pass.
+- **Declared overrides.** `.github/pipeline-overrides.yaml` replaces commenting-out critic checks. Bypasses are recorded in `rejection-log.md`, never hidden.
+- **Partial entry points.** `/run-pipeline` can start at any step (`refine` / `spec-critic` / `plan` / `implement` / `pattern-critic` / `scribe`) via the override file's `entry_point.start_at`.
+- **Real agent handoffs.** Each agent ends with a `### HANDOFF:` block; `/run-pipeline` invokes the next subagent via the `Agent` tool — no manual copy-paste between steps.
 
 ---
 
@@ -63,6 +42,7 @@ semiPilotPro/
 │   └── explain-changes.prompt.md       # Answers "why was X changed?" with source citations
 ├── skills/
 │   ├── wiki-init/      # Scaffolds .wiki/ on first use
+│   ├── patterns-seed/  # Infers naming/DI/error/test conventions from an existing codebase → seeds PATTERNS.md
 │   ├── llm-wiki/       # Builds a context document from wiki + source for LLM queries
 │   ├── code-analyzer/  # Cyclomatic complexity + file-level deltas, JSON output
 │   └── project-map/    # Monorepo package + dependency map
@@ -94,17 +74,26 @@ your-project/
 
 This scaffolds `.wiki/` with seven template files. `OVERVIEW.md` and `DATA_MODELS.md` are auto-seeded from detected manifests and schemas.
 
-**3. Populate the critical wiki files**
+**3. Seed PATTERNS.md from your existing code**
 
-Before running any cycle, fill in at least:
+```
+#patterns-seed
+```
 
-- `.wiki/PATTERNS.md` — naming, DI, error-handling, and test conventions
+Required on a non-empty codebase. Infers your naming convention, DI style, error-handling style, and test-file pattern from the code as it is today, and writes them to `PATTERNS.md`. Without this, the Pattern Critic has nothing to enforce on cycle 1 and rejects every diff — which is the usual reason people end up commenting out critic checks.
+
+Run with `--dry-run` first to inspect what it inferred; edit `PATTERNS.md` by hand if a section is wrong. This is the only wiki file you may edit directly during bootstrap; `@scribe` owns it afterwards.
+
+**4. Fill in the rest of the wiki**
+
+Before running any cycle, also fill in:
+
 - `.wiki/DEPENDENCIES.md` — current, deprecated, and banned libraries
-- `.wiki/DATA_MODELS.md` — key schemas
+- `.wiki/DATA_MODELS.md` — key schemas (auto-seeded; verify)
 
-Budget 30–60 minutes. The critics cannot function without it and will fail loudly if it is missing.
+Budget 30 minutes. The critics will fail loudly if these are empty.
 
-**4. Run your first cycle**
+**5. Run your first cycle**
 
 ```
 /run-pipeline
@@ -117,6 +106,8 @@ Or manually, step by step:
   → @pattern-critic  (REJECTED? → /fix-rejection → @pattern-critic)
   → /create-mr-description → @scribe
 ```
+
+To start in the middle of the pipeline, write `.github/pipeline-overrides.yaml` with `entry_point.start_at: <step>` and any required `inline_inputs`. See `semipilot-core.md > Partial Entry Points`.
 
 ---
 
@@ -191,6 +182,7 @@ Critics run on Opus — a wrong gate call is the most expensive error in the pip
 | Skill | Purpose |
 |---|---|
 | `#wiki-init` | Scaffold `.wiki/` on first use |
+| `#patterns-seed` | Infer naming, DI, error-handling, and test conventions from an existing codebase. Seeds `PATTERNS.md` so the Pattern Critic has something to enforce on cycle 1. |
 | `#llm-wiki` | Build a context document for LLM queries (concat or FAISS) |
 | `#code-analyzer` | Cyclomatic complexity + file-level deltas, JSON output |
 | `#project-map` | Monorepo package and dependency map |
