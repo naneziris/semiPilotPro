@@ -31,14 +31,24 @@ From your project root:
 
 This scaffolds `.wiki/` with seven template files. `OVERVIEW.md` and `DATA_MODELS.md` get auto-seeded from detected manifests and schemas.
 
-**Step 3 — populate the critical wiki files by hand.**
-The auto-seed is a starting point, not a finish. Before running any RPI cycle, fill in at least:
+**Step 3 — seed `PATTERNS.md` from your existing code.**
 
-- `.wiki/PATTERNS.md` — your naming, DI, error-handling, and test conventions.
+```
+#patterns-seed --dry-run    # inspect what it would write
+#patterns-seed              # write it
+```
+
+Required on a non-empty codebase. `#patterns-seed` samples your source files and infers the dominant naming convention, DI style, error-handling pattern, import style, and test-file pattern. It writes these to `PATTERNS.md` so the Pattern Critic has something to enforce on the first cycle. Without this step the critic either rejects every diff or — more commonly — gets commented out, which defeats the system.
+
+If a section is wrong, edit `PATTERNS.md` directly. This is the **only** wiki file you may edit by hand during bootstrap; `@scribe` owns it after the first successful cycle.
+
+**Step 4 — fill in the remaining critical files.**
+Before running any RPI cycle, also fill in:
+
 - `.wiki/DEPENDENCIES.md` — current, deprecated, and banned libraries.
-- `.wiki/DATA_MODELS.md` — key schemas.
+- `.wiki/DATA_MODELS.md` — key schemas (auto-seeded; verify and refine).
 
-Budget 30–60 minutes. This is a one-time cost and pays for itself on the first real task.
+Budget 30 minutes. This is a one-time cost and pays for itself on the first real task.
 
 ---
 
@@ -59,7 +69,13 @@ The steps and gates are identical in both modes.
 /refine-requirements
 ```
 
-The refiner asks 3–5 clarifying questions, reads the wiki, and writes `.github/requirements/requirements.md` with testable acceptance criteria. No code is touched.
+The refiner does three things, in order:
+
+1. **Asks 3–5 clarifying questions** in a single batched message and waits for your answers.
+2. **Runs impact analysis** using `search` and `usages` on every symbol the change touches. The result is a populated `## Impact Analysis` section in the requirements file: consumers (with breakage-risk ratings), side-effect surfaces, and tests that exercise the touched surface. This is the step that catches refactors that would miss a `useEffect`, a context provider, or a hook subscription.
+3. **Checks decomposition triggers.** If the change crosses more than 5 files, more than 2 architectural boundaries, introduces a new pattern, or modifies a shared API with more than 3 call sites, the refiner emits `requirements-index.md` plus one file per sub-requirement. Each sub-requirement runs its own RPI cycle.
+
+Output: `.github/requirements/requirements.md` **or** `requirements-index.md` + sub-files. No code is touched.
 
 ### Step 2 — GATE 1 (Spec Critic)
 
@@ -67,10 +83,10 @@ The refiner asks 3–5 clarifying questions, reads the wiki, and writes `.github
 @spec-critic
 ```
 
-Reads `requirements.md` + `.wiki/` and returns a **binary** verdict.
+Reads the requirements + `.wiki/` and returns a **binary** verdict against nine checks (feasibility, edge cases, testability, circularity, scope coherence, impact-analysis coverage, decomposition compliance, …).
 
 - **APPROVED** → pause for your approval, then continue.
-- **REJECTED** → the critic names the single change that would unblock the spec. Fix `requirements.md` and re-run.
+- **REJECTED** → the critic names the single change that would unblock the spec. Fix the requirements and re-run.
 
 ### Step 3 — Plan
 
@@ -78,7 +94,7 @@ Reads `requirements.md` + `.wiki/` and returns a **binary** verdict.
 /create-implementation-plan
 ```
 
-The planner reads the approved spec + the full wiki and writes `.github/implementation-plan.md`: files to change, a test case per acceptance criterion, atomic implementation steps, and the `Wiki Updates Required` list.
+The planner reads the approved spec, the impact analysis, and the full wiki, then writes `.github/implementation-plan.md`: files to change, a test case per acceptance criterion, atomic implementation steps, and the `Wiki Updates Required` list. Every `high`-risk consumer from the impact analysis must appear in `Files to Change` — or be explicitly justified as "no change needed." For a `requirements-index.md` input, the planner produces one plan per sub-requirement.
 
 ### Step 4 — Implement
 
@@ -112,6 +128,8 @@ Reads the diff against `.wiki/PATTERNS.md`, `DEPENDENCIES.md`, and `API.md`, ver
 
 - **APPROVED** → pause for your approval, then continue.
 - **REJECTED** → the critic lists the specific fixes in order. Run `/fix-rejection` — it reads the rejection log, shows you what it will change, applies only those fixes, re-runs the downstream verification steps, and resubmits to `@pattern-critic`. Do not re-run `/implement-plan` from scratch.
+
+**Mid-implementation scope expansion:** if `/implement-plan` discovers a file outside `Files to Change` that genuinely must be modified (typically because the impact analysis missed a consumer), it emits a `### SCOPE EXPANSION REQUEST` block and waits. You can approve inline or via `pipeline-overrides.yaml`. Approved expansions are recorded in the rejection log as `SCOPE_EXPANSION` entries and surface in the Pattern Critic's verdict — never silent.
 
 ### Step 6 — MR Description (optional)
 
@@ -242,22 +260,31 @@ For a skip, just edit the code, run tests, and commit. The wiki doesn't need an 
 
 ## 7. Reading the flow diagram
 
-The diagram at the top of this guide is the single source of truth for the visible flow. Key things to notice:
+The diagram at the top of this guide is the single source of truth for the visible flow. It is intentionally minimal — one column, top to bottom.
 
-- **Center column** = the pipeline, top to bottom, driven directly by Dev.
-- **Yellow sync bars** = the two places you are expected to respond.
-- **Red "REJECTED" loops** on the right = what happens when a critic blocks.
-- **Orange dashed arrows** to the wiki = read access. Agents read from these files.
-- **Purple solid arrow** from `@scribe` to the wiki = write access. Only scribe writes.
-- **Left panel** = skills, callable any time, from inside or outside the pipeline.
-- **YAML rail callout** (bottom-left) = the deterministic 11-step sequence `/implement-plan` must follow.
+- **Blue boxes** = pipeline agents and prompts.
+- **Red boxes** = the two critic gates (Gate 1 = spec, Gate 2 = pattern).
+- **Amber boxes** = human sync points. You respond to exactly two per successful cycle.
+- **Purple box** = `@scribe`. The teal underline marks it as the only writer to `.wiki/`.
+- **Slate boxes** = start (`User Idea`) and end (`Change Complete`).
+- **Red dashed arrows on the left** = critic rejections. Spec rejection loops back to `@refiner`; pattern rejection loops back to `/implement-plan` (via `/fix-rejection`).
+- **Italic notes on the right** = what each step produces or consumes.
+
+Not pictured (intentionally — they add complexity and live in the docs instead):
+
+- The 11-step YAML rail inside `/implement-plan` — see Section 2, Step 4.
+- The five reusable skills (`#wiki-init`, `#patterns-seed`, `#code-analyzer`, `#llm-wiki`, `#project-map`) — they are callable from anywhere, not part of the spine.
+- The override and decomposition machinery — see Sections 15 and 16.
 
 ---
 
 ## 8. Troubleshooting
 
 **"Spec critic keeps rejecting with 'wiki missing'."**
-`.wiki/` doesn't exist. Run `#wiki-init`. Populate `PATTERNS.md` and `DEPENDENCIES.md` by hand.
+`.wiki/` doesn't exist. Run `#wiki-init`, then `#patterns-seed` (on an existing codebase), then populate `DEPENDENCIES.md` by hand.
+
+**"Pattern critic rejects everything because `PATTERNS.md` is empty / I find myself commenting out critic checks."**
+This is the bootstrap deadlock. Run `#patterns-seed` from the project root — it scans the existing code and seeds `PATTERNS.md` with the conventions it finds. If a section is wrong, edit it directly. Stop commenting out checks; declare the bypass in `.github/pipeline-overrides.yaml` instead (see Section 15).
 
 **"Pattern critic rejects on a naming convention I don't care about."**
 The critic only enforces what's in `.wiki/PATTERNS.md`. Remove or change the convention there — don't argue with the critic.
@@ -582,3 +609,177 @@ Delete `.github/implementation-progress.json`. The next run starts from step 1 r
 ```
 
 This file is never committed — add `.github/implementation-progress.json` to `.gitignore`.
+
+---
+
+## 15. Pipeline overrides (`.github/pipeline-overrides.yaml`)
+
+The override file replaces the practice of commenting out critic checks to get past a blocked gate. Every bypass is **declared** in this file and **recorded** in the rejection log. There is no silent override.
+
+**When to use it:**
+
+- A critic is rejecting on a check that genuinely does not apply to this cycle (e.g., the impact-analysis check on a one-line copy fix).
+- You want to start the pipeline mid-flow (you already have a hand-written plan and don't need refine or spec-critic).
+- You're running autonomously and need to pre-approve an expected scope expansion.
+
+**File schema** (all sections optional):
+
+```yaml
+cycle_id: 2025-03-12-checkout-fix   # must match the current cycle; otherwise the file is ignored
+
+entry_point:
+  start_at: plan                    # refine | spec-critic | plan | implement | pattern-critic | scribe
+  pauses: at-gates                  # none | at-gates (default) | after-each-step
+  inline_inputs:
+    plan: |
+      # Implementation Plan: ...
+      <inline markdown, written to .github/implementation-plan.md before the pipeline runs>
+
+overrides:
+  - critic: spec-critic
+    check: edge-cases
+    reason: "Single-line copy change; no edge cases apply."
+    expires_after_cycles: 1
+  - critic: pattern-critic
+    check: plan-adherence
+    reason: "Approved scope expansion for src/auth/session.ts — surfaced via SCOPE EXPANSION REQUEST."
+    expires_after_cycles: 1
+```
+
+**How it gets enforced:**
+
+- Both critics read the file before running their checks. Matching `(critic, check)` pairs are marked `overridden` (not `pass`) in the verdict.
+- Each honored override appends an `OVERRIDDEN` entry to `.github/rejection-log.md` with the verbatim reason.
+- A wrong `cycle_id` causes the file to be ignored (with a warning) — stale overrides cannot persist across cycles.
+- `@scribe` reads `OVERRIDDEN` entries when writing the CHANGELOG and reports them at release time.
+
+**Rule of thumb:** if you would have commented out a critic check, write an override entry instead.
+
+---
+
+## 16. Partial entry points (start mid-pipeline)
+
+The pipeline does not have to start at `/refine-requirements`. You can begin at any step by setting `entry_point.start_at` in `pipeline-overrides.yaml`.
+
+| `start_at` | Skips | Required input |
+|---|---|---|
+| `refine` | nothing | a raw idea (default) |
+| `spec-critic` | refine | `requirements.md` exists OR `inline_inputs.requirements` |
+| `plan` | refine, spec-critic | APPROVED `requirements.md` OR `inline_inputs.requirements` |
+| `implement` | refine, spec-critic, plan | `implementation-plan.md` exists OR `inline_inputs.plan` |
+| `pattern-critic` | everything up to implement | a diff already in the working tree |
+| `scribe` | everything up to pattern-critic | a recently-approved diff |
+
+**Example — "I have a plan; just implement it":**
+
+```yaml
+cycle_id: 2025-03-12-hotfix
+entry_point:
+  start_at: implement
+  pauses: at-gates
+```
+
+`/run-pipeline` reads this, jumps to `/implement-plan`, runs the YAML rail, hands off to `@pattern-critic`, pauses at Gate 2 for your approval, then runs `@scribe`.
+
+**Example — "Run autonomously, no pauses, override the edge-cases check":**
+
+```yaml
+cycle_id: 2025-03-12-typo
+entry_point:
+  pauses: none
+overrides:
+  - critic: spec-critic
+    check: edge-cases
+    reason: "Single-character typo fix; no edge cases."
+```
+
+Use `pauses: none` only when overrides cover every potential rejection — otherwise the pipeline will stop the moment a check fails.
+
+---
+
+## 17. Decomposition: when one requirement becomes many
+
+`@refiner` automatically decomposes a change into multiple sub-requirements when **any** of the following hold (computed from the Impact Analysis):
+
+- More than 5 files with non-trivial changes.
+- More than 2 architectural boundaries crossed.
+- Introduces a new pattern (new state management, new DI style, new error handling).
+- Modifies a shared API consumed by more than 3 call sites.
+
+**What the output looks like:**
+
+Instead of `requirements.md`, you get:
+
+```
+.github/requirements/
+├── requirements-index.md
+├── 01-extract-state-to-context.md
+├── 02-migrate-consumer-a.md
+├── 03-migrate-consumer-b.md
+└── 04-remove-old-reducer.md
+```
+
+`requirements-index.md` lists the sub-requirements in dependency order:
+
+```markdown
+# Requirements Index: Move auth state from reducer to context
+
+## Decomposition Rationale
+Impact analysis identified 8 consumers across 2 architectural boundaries.
+Introduces a new state-management pattern (Context+useEffect, replacing useReducer).
+
+## Sub-Requirements
+| Order | File | Title | Depends on | Estimated files |
+|---|---|---|---|---|
+| 1 | 01-extract-state-to-context.md | Add AuthContext provider | — | 2 |
+| 2 | 02-migrate-consumer-a.md | Migrate LoginPanel | 1 | 1 |
+| 3 | 03-migrate-consumer-b.md | Migrate UserBadge | 1 | 1 |
+| 4 | 04-remove-old-reducer.md | Delete legacy reducer | 2, 3 | 3 |
+
+## Cross-Cutting Acceptance
+- All auth tests still pass with the new context provider.
+- No imports of `authReducer` remain in the tree after sub-cycle 4.
+```
+
+**How the pipeline walks it:**
+
+`/run-pipeline` walks the index in dependency order. Each sub-requirement runs its **own** full RPI cycle: plan → implement → pattern-critic → scribe. Gates pause as configured. After the last sub-cycle, the orchestrator runs any `Cross-Cutting Acceptance` criteria.
+
+**Why decomposition matters:**
+
+A 50-file refactor done as one cycle produces an unverifiable plan and a diff too large to review meaningfully. Decomposition turns it into N small, independently verifiable changes — each with its own tests, its own gate pass, and its own wiki update. The total work is the same; the blast radius per cycle is much smaller.
+
+**Forcing or suppressing decomposition:**
+
+- If you want to force decomposition on a borderline case, ask `@refiner` directly: "Decompose this even though it only touches 4 files — I want each consumer migration separately reviewable."
+- If `@refiner` decomposes but you genuinely want one cycle, override the spec-critic's decomposition check in `pipeline-overrides.yaml` and the index file collapses into a single requirements file.
+
+---
+
+## 18. Impact analysis: what it is and what to verify
+
+The `## Impact Analysis` section in `requirements.md` is where most refactor failures get caught — or missed. Before approving a spec at Gate 1, read this section critically.
+
+**What `@refiner` produces:**
+
+- A list of symbols and modules the change touches.
+- A **Consumers** table: every caller, subscriber, or mocker with a `low / medium / high` breakage-risk rating.
+- A list of side-effect surfaces: state, context providers, event handlers, lifecycle hooks (e.g., `useEffect`), subscriptions.
+- A list of tests that exercise the touched surface.
+- A `Confidence: high | medium | low` rating.
+
+**What to check when reviewing:**
+
+- **Every `high`-risk consumer should appear in either the plan's `Files to Change` or the requirements' `Out of Scope`.** A high-risk consumer that's not addressed anywhere is a side effect waiting to break.
+- **Side-effect surfaces are listed, not "none" by default.** If the refiner wrote "none" for a change involving React hooks, that's a red flag — push back.
+- **Confidence is `high` for non-trivial changes.** `medium` or `low` is fine but the Open Questions section should name the specific unknowns.
+
+**What to do when impact analysis is wrong:**
+
+- If a consumer is missing → reply to `@refiner`: "You missed `<file>` which imports `<symbol>`. Re-run the analysis." The refiner re-traces.
+- If a side-effect surface is missing → same approach.
+- If decomposition was triggered but the breakdown is wrong → reply with the corrected dependency order; `@refiner` rewrites the index.
+
+**Why this exists:**
+
+Previous failures in real refactors (e.g., moving auth state from `useReducer` to a context provider) typically came from the refiner not tracing the call graph. Impact analysis is a mandatory step now, and the spec-critic rejects shallow analyses. If a side effect breaks in production, the rejection log should show whether the impact analysis caught it (the system worked) or missed it (the heuristics need strengthening).

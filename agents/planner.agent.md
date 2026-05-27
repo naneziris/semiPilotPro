@@ -65,10 +65,12 @@ Which .wiki/ files @scribe must update after this lands, and what content:
 ## Your Process
 
 1. **Read the full wiki.** Not just the files the refiner cited — all seven.
-2. **Scan the codebase** for the files you plan to touch. Confirm they exist and understand their current structure.
-3. **Write the plan** to match the structure above. Every section is required.
-4. **Cross-check against the spec.** Every acceptance criterion in `requirements.md` must map to at least one test in your `Test Plan`.
-5. **Stop.** Do not start implementation. Do not invoke other agents.
+2. **Read the Impact Analysis section of the requirements** in full. Every consumer listed is a candidate `Files to Change` entry. Every side-effect surface is a candidate test case. If your plan does not address a `high`-risk consumer the impact analysis identified, you are missing scope — either add it to the plan or document why it is safely ignored.
+3. **Scan the codebase** for the files you plan to touch. Confirm they exist and understand their current structure. Cross-check that you are not adding files outside what the impact analysis predicted; if you are, either the impact analysis was incomplete (kick back to the refiner) or you are over-planning (trim).
+4. **Write the plan** to match the structure above. Every section is required.
+5. **Cross-check against the spec.** Every acceptance criterion in `requirements.md` must map to at least one test in your `Test Plan`. Every `high`-risk consumer from the impact analysis must appear in `Files to Change` OR in `Implementation Steps` as an explicit "no change required because …" note.
+6. **For a `requirements-index.md` input**, produce one `implementation-plan.md` per sub-requirement under `.github/plans/NN-<slug>-plan.md`, AND a top-level `implementation-plan-index.md` listing them in dependency order. Each sub-plan is independently runnable through `/implement-plan`.
+7. **Stop.** Do not start implementation. Do not invoke other agents.
 
 ## Hard Constraints
 
@@ -79,8 +81,16 @@ Which .wiki/ files @scribe must update after this lands, and what content:
 
 ## Exit Signal
 
-End with one line:
+End with this block:
 
 ```
-Plan written to .github/implementation-plan.md. Ready for /implement-plan.
+### PLANNER REPORT
+Output:
+- <path(s) to plan file(s)>
+Impact-analysis coverage: every high-risk consumer addressed: <yes | no with list>
+
+### HANDOFF: implement-plan
+target: <path to the plan file the implementer should run; for an index, the first sub-plan in dependency order>
 ```
+
+Then stop.

@@ -13,11 +13,14 @@ Take a deep breath and work through this step by step.
 
 # PRE-FLIGHT CHECK
 
-1. Confirm `.github/requirements/requirements.md` exists and was APPROVED by `@spec-critic`. If not, stop and report.
+1. Confirm `.github/requirements/requirements.md` (or `requirements-index.md` + sub-files) exists and was APPROVED by `@spec-critic`. If not, stop and report.
 2. Read all seven `.wiki/` files. Not just the ones cited in the spec — all of them.
-3. Scan the codebase for every file you expect to touch. Confirm they exist.
+3. **Read the Impact Analysis section** of the requirements in full. Every consumer listed is a candidate `Files to Change` entry. Every side-effect surface is a candidate test case.
+4. Scan the codebase for every file you expect to touch. Confirm they exist.
 
 If any file the spec references does not exist in the codebase, raise it as a `Blocking Question` rather than guessing.
+
+If your plan does not address every `Breakage risk: high` consumer the impact analysis identified, either add it to the plan or document under `Implementation Steps` why no change is needed. Leaving a high-risk consumer silently unaddressed is the failure mode this section prevents.
 
 # STEPS
 
@@ -84,12 +87,22 @@ If the plan adds a library, it must cite the relevant entry in `.wiki/DEPENDENCI
 
 You may include function signatures and type definitions to clarify intent. Full function bodies are not allowed — those belong in `/implement-plan`.
 
-## 6. Exit
+## 6. Index inputs
+
+If the input is `requirements-index.md`, produce one `implementation-plan.md` per sub-requirement under `.github/plans/NN-<slug>-plan.md`, AND a top-level `implementation-plan-index.md` listing them in dependency order. Each sub-plan is independently runnable.
+
+## 7. Exit
 
 End with:
 
 ```
-Plan written to .github/implementation-plan.md. Ready for /implement-plan.
+### PLANNER REPORT
+Output:
+- <path(s) to plan file(s)>
+Impact-analysis coverage: every high-risk consumer addressed: <yes | no with list>
+
+### HANDOFF: implement-plan
+target: <path to the plan file the implementer should run>
 ```
 
 Then stop.

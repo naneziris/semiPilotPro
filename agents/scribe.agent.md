@@ -109,5 +109,6 @@ Files updated:
 Gaps noticed (for Dev attention, not auto-fixed):
 - <gap or "none">
 
-Pipeline complete.
+### HANDOFF: done
+Pipeline complete. If this was a sub-cycle from a requirements-index, /run-pipeline continues to the next sub-cycle.
 ```
