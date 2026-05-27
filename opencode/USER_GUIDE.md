@@ -37,7 +37,9 @@ git init
 
 ### 1.4 Deploy the SemiPilot Pro files
 
-From the `semiPilotPro` repo, copy the OpenCode assets into your new project:
+> **Critical:** OpenCode looks for agents and commands in **`.opencode/`** (with a leading dot). A folder named `opencode/` (no dot) will be silently ignored and nothing will appear.
+
+From inside your new project directory:
 
 ```bash
 # System prompt — read by OpenCode on every session
@@ -46,19 +48,22 @@ cp path/to/semiPilotPro/opencode/AGENTS.md ./AGENTS.md
 # Default model config
 cp path/to/semiPilotPro/opencode/opencode.json ./opencode.json
 
-# Agents and commands
-mkdir -p .opencode/agents .opencode/commands
-cp path/to/semiPilotPro/opencode/agents/*.md  .opencode/agents/
+# Agents — the leading dot in .opencode/ is required
+mkdir -p .opencode/agents
+cp path/to/semiPilotPro/opencode/agents/*.md .opencode/agents/
+
+# Commands — the leading dot in .opencode/ is required
+mkdir -p .opencode/commands
 cp path/to/semiPilotPro/opencode/commands/*.md .opencode/commands/
 ```
 
-Your project structure should now look like:
+Your project structure should look exactly like this:
 
 ```
 my-app/
-├── AGENTS.md
-├── opencode.json
-└── .opencode/
+├── AGENTS.md               ← project root (not inside .opencode/)
+├── opencode.json           ← project root (not inside .opencode/)
+└── .opencode/              ← leading dot required
     ├── agents/
     │   ├── refiner.md
     │   ├── spec-critic.md
@@ -80,6 +85,8 @@ my-app/
         ├── project-map.md
         └── llm-wiki.md
 ```
+
+After copying, restart OpenCode. Type `@` to confirm agents appear and `/` to confirm commands appear.
 
 Also copy the skills folder (Python scripts needed by commands):
 

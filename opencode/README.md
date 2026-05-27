@@ -36,20 +36,47 @@ opencode/
 
 ## Deploying to a project
 
-Copy these files to the target project:
+> **Critical:** OpenCode looks for agents and commands in **`.opencode/`** (with a leading dot). A folder named `opencode/` (no dot) will be silently ignored — agents and commands won't appear.
+
+Run this from inside your target project directory:
 
 ```bash
+# From inside your project root:
+
 # System prompt — read automatically by OpenCode on every session
-cp opencode/AGENTS.md <project>/AGENTS.md
+cp /path/to/semiPilotPro/opencode/AGENTS.md ./AGENTS.md
 
 # Default model config
-cp opencode/opencode.json <project>/opencode.json
+cp /path/to/semiPilotPro/opencode/opencode.json ./opencode.json
 
-# Agents and commands
-mkdir -p <project>/.opencode/agents <project>/.opencode/commands
-cp opencode/agents/*.md  <project>/.opencode/agents/
-cp opencode/commands/*.md <project>/.opencode/commands/
+# Agents — note the leading dot in .opencode/
+mkdir -p .opencode/agents
+cp /path/to/semiPilotPro/opencode/agents/*.md .opencode/agents/
+
+# Commands — note the leading dot in .opencode/
+mkdir -p .opencode/commands
+cp /path/to/semiPilotPro/opencode/commands/*.md .opencode/commands/
 ```
+
+Verify the structure looks exactly like this:
+
+```
+your-project/
+├── AGENTS.md               ← project root
+├── opencode.json           ← project root
+└── .opencode/              ← leading dot required
+    ├── agents/
+    │   ├── refiner.md
+    │   ├── spec-critic.md
+    │   ├── planner.md
+    │   ├── pattern-critic.md
+    │   └── scribe.md
+    └── commands/
+        ├── run-pipeline.md
+        └── ...
+```
+
+After copying, restart OpenCode. Type `@` to see agents and `/` to see commands.
 
 The skills (Python scripts in `skills/`) must also be accessible. Either:
 - Keep the `semiPilotPro` repo alongside your project and update the paths in `opencode.json`, or
