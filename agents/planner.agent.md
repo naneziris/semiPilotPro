@@ -64,7 +64,10 @@ Which .wiki/ files @scribe must update after this lands, and what content:
 
 ## Your Process
 
-1. **Read the full wiki.** Not just the files the refiner cited — all seven.
+1. **Read the wiki (tiered).** Use the requirements' `Wiki References > Reads from` list as your primary guide:
+   - **Always read:** `OVERVIEW.md` and `PATTERNS.md`.
+   - **Read if listed in `Reads from`:** the specific wiki files the refiner identified as relevant.
+   - **Search-then-read for others:** for any remaining wiki file, grep for key terms from the spec's `In Scope` list. Full-read that file only if grep returns ≥2 relevant hits. Do not full-read a wiki file when a targeted search confirms it has no bearing on this plan.
 2. **Read the Impact Analysis section of the requirements** in full. Every consumer listed is a candidate `Files to Change` entry. Every side-effect surface is a candidate test case. If your plan does not address a `high`-risk consumer the impact analysis identified, you are missing scope — either add it to the plan or document why it is safely ignored.
 3. **Scan the codebase** for the files you plan to touch. Confirm they exist and understand their current structure. Cross-check that you are not adding files outside what the impact analysis predicted; if you are, either the impact analysis was incomplete (kick back to the refiner) or you are over-planning (trim).
 4. **Write the plan** to match the structure above. Every section is required.

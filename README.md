@@ -31,6 +31,7 @@ semiPilotPro/
 │   ├── planner.agent.md        # Writes concrete implementation plans
 │   ├── spec-critic.agent.md    # Gate 1 — pre-implementation feasibility check
 │   ├── pattern-critic.agent.md # Gate 2 — post-implementation standards check
+│   ├── implementer.agent.md    # YAML rail executor (isolated subagent)
 │   └── scribe.agent.md         # Updates .wiki/ and CHANGELOG
 ├── prompts/
 │   ├── run-pipeline.prompt.md          # Chains all steps; pauses at gates
@@ -153,13 +154,14 @@ Seven files. Scribe is the only agent that writes to them.
 
 | Agent | Role | Model |
 |---|---|---|
-| `@refiner` | Requirements analysis and gap detection | Claude Opus 4.6 |
+| `@refiner` | Requirements analysis and gap detection | Claude Sonnet 4.6 |
 | `@planner` | Technical implementation plan | Claude Sonnet 4.6 |
 | `@spec-critic` | Gate 1 — pre-implementation feasibility | Claude Opus 4.6 |
 | `@pattern-critic` | Gate 2 — post-implementation standards | Claude Opus 4.6 |
+| `@implementer` | YAML rail executor — runs in isolated context window | Claude Sonnet 4.6 |
 | `@scribe` | Wiki and changelog updates | Claude Sonnet 4.6 |
 
-Critics run on Opus — a wrong gate call is the most expensive error in the pipeline.
+Critics run on Opus — a wrong gate call is the most expensive error in the pipeline. Workers run on Sonnet. `@implementer` runs as a subagent so implementation context (lint logs, test output) stays isolated from the orchestrator.
 
 ---
 

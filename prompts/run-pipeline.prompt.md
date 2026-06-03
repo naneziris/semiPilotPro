@@ -1,6 +1,6 @@
 ---
 description: Run the full RPI pipeline from idea to wiki update. Supports partial entry points, declared overrides, autonomous agent handoffs, and walking a requirements-index across sub-cycles.
-model: Claude Opus 4.6
+model: claude-sonnet-4-6
 tools: ["search", "usages", "edit", "runCommands", "Agent"]
 ---
 
@@ -49,7 +49,11 @@ Check if the requirements artifact is `requirements-index.md`. If so, this run w
 
 # ORCHESTRATION RULES
 
-- **Every agent invocation goes through the `Agent` tool.** Do not paste agent prompts inline. Use `subagent_type` matching the agent's `name` field (`refiner`, `spec-critic`, `planner`, `pattern-critic`, `scribe`). For implementer and fix-rejection, those are prompts not agents — invoke them in-context (you are the implementer when running them).
+- **Every agent invocation goes through the `Agent` tool.** Do not paste agent prompts inline. Use `subagent_type` matching the agent's `name` field (`refiner`, `spec-critic`, `planner`, `implementer`, `pattern-critic`, `scribe`). For `fix-rejection` and `gate-triage`, invoke in-context — they are prompts, not agents.
+- **Run `/gate-triage` before each critic.** Before invoking `@spec-critic` (Gate 1) or `@pattern-critic` (Gate 2), run `/gate-triage` in-context. If it returns `STRUCTURAL_FAIL`, post the failure reason to Dev and route accordingly — do NOT invoke the critic. Only invoke the critic when triage returns `PASS`.
+- **Context tracking after each step.** After routing on a `### HANDOFF:` block, write this line to your working context and discard the agent's full report body:
+  `[STEP <N> <AGENT>] verdict=<APPROVED|REJECTED|BLOCKED|DONE> artifact=<path> flags=<N>`
+  Never carry forward report prose, reasoning, or intermediate output. Route on facts, not narrative.
 - **Read each agent's `### HANDOFF:` block** at the end of their report. That is the routing signal. Do not infer the next step from prose.
 - **On REJECTED**, route per the verdict's `### HANDOFF:` target (refiner or fix-rejection).
 - **On hard block from /implement-plan**, surface the blocked-step error verbatim and stop. Wait for Dev to type `resume` (the checkpoint file picks up where it failed) or `abandon`.
@@ -77,6 +81,10 @@ If `pauses == after-each-step`, pause and wait for Dev acknowledgement.
 
 # STEP 2 (skipped if start_at > spec-critic): GATE 1 — SPEC CRITIC
 
+**Pre-critic triage:** Run `/gate-triage` in-context with `gate: 1` and the requirements path.
+- If `STRUCTURAL_FAIL` → post the failure reason to Dev. Ask: "Type **revise** to fix the structural issue and loop back to refine, or **abandon** to stop." Do NOT invoke `@spec-critic`.
+- If `PASS` → invoke `@spec-critic` as below.
+
 Invoke `@spec-critic`, passing the requirements path the refiner handed off. The critic returns the SPEC CRITIC VERDICT block.
 
 **If REJECTED:**
@@ -100,21 +108,25 @@ If `pauses == after-each-step`, pause.
 
 # STEP 4 (skipped if start_at > implement): IMPLEMENT
 
-Run `/implement-plan` in-context. It executes the 11-step YAML rail with checkpointing.
+Invoke `@implementer` via the `Agent` tool. It executes the 11-step YAML rail in an isolated context window — lint logs, test output, and file reads stay there, not here. You receive only the IMPLEMENTER REPORT block back.
 
-**On hard block:**
-- Post the blocked step's verbatim error.
-- Wait for Dev: `resume` (re-enters the rail; checkpoint file picks up) or `abandon` (stop).
+**On hard block (IMPLEMENTER REPORT shows a BLOCKED step):**
+- Surface the blocked step's error verbatim to Dev (from the report — do not re-read implementation files).
+- Wait for Dev: `resume` (re-invoke `@implementer`; checkpoint file picks up) or `abandon` (stop).
 
-**On `### SCOPE EXPANSION REQUEST` from the implementer:**
-- If `pipeline-overrides.yaml` has a matching `check: plan-adherence` entry whose reason matches, auto-approve and continue.
-- Otherwise pause and surface the request to Dev. On `approved`, continue. On `decline`, route back to `@planner` to revise the plan.
+**On `### SCOPE EXPANSION REQUEST` in the IMPLEMENTER REPORT:**
+- If `pipeline-overrides.yaml` has a matching `check: plan-adherence` entry whose reason matches, auto-approve and re-invoke `@implementer`.
+- Otherwise pause and surface the request to Dev. On `approved`, re-invoke `@implementer`. On `decline`, route back to `@planner` to revise the plan.
 
 On completion, the IMPLEMENTER REPORT ends with `### HANDOFF: pattern-critic`. Continue.
 
 ---
 
 # STEP 5 (skipped if start_at > pattern-critic): GATE 2 — PATTERN CRITIC
+
+**Pre-critic triage:** Run `/gate-triage` in-context with `gate: 2`.
+- If `STRUCTURAL_FAIL` → post the failure reason to Dev. Ask: "Type **fix** to apply via /fix-rejection, or **abandon**." Do NOT invoke `@pattern-critic`.
+- If `PASS` → invoke `@pattern-critic` as below.
 
 Invoke `@pattern-critic`. The critic returns the PATTERN CRITIC VERDICT block.
 
@@ -131,11 +143,9 @@ Invoke `@pattern-critic`. The critic returns the PATTERN CRITIC VERDICT block.
 
 # STEP 6 (optional): MR DESCRIPTION
 
-If `entry_point.skip_mr_description: true`, skip. Otherwise ask:
+**Default: skip.** Only run if `entry_point.generate_mr_description: true` is set in `pipeline-overrides.yaml`, OR if Dev explicitly types `mr` after Gate 2 approval.
 
-> "Would you like me to generate an MR description? Type **yes** or **skip**."
-
-On `yes`, run `/create-mr-description`. Then continue.
+If triggered, run `/create-mr-description` in-context. Then continue.
 
 ---
 

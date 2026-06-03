@@ -71,7 +71,7 @@ The steps and gates are identical in both modes.
 
 The refiner does three things, in order:
 
-1. **Asks 3–5 clarifying questions** in a single batched message and waits for your answers.
+1. **Asks 3–5 clarifying questions** in a single batched message and waits for your answers — but only if the idea is ambiguous. If your request names specific files or functions and the wiki provides the relevant constraints, the refiner skips directly to impact analysis and puts any residual unknowns in `Open Questions`.
 2. **Runs impact analysis** using `search` and `usages` on every symbol the change touches. The result is a populated `## Impact Analysis` section in the requirements file: consumers (with breakage-risk ratings), side-effect surfaces, and tests that exercise the touched surface. This is the step that catches refactors that would miss a `useEffect`, a context provider, or a hook subscription.
 3. **Checks decomposition triggers.** If the change crosses more than 5 files, more than 2 architectural boundaries, introduces a new pattern, or modifies a shared API with more than 3 call sites, the refiner emits `requirements-index.md` plus one file per sub-requirement. Each sub-requirement runs its own RPI cycle.
 
@@ -83,7 +83,7 @@ Output: `.github/requirements/requirements.md` **or** `requirements-index.md` + 
 @spec-critic
 ```
 
-Reads the requirements + `.wiki/` and returns a **binary** verdict against nine checks (feasibility, edge cases, testability, circularity, scope coherence, impact-analysis coverage, decomposition compliance, …).
+When using `/run-pipeline`, the orchestrator first runs `/gate-triage` in-context before invoking the spec critic. Gate triage checks structural completeness: all required sections present, Impact Analysis table populated, Acceptance Criteria non-empty. A structural failure returns immediately without invoking the critic — no Sonnet call needed. If triage passes, `@spec-critic` reads the requirements + `.wiki/` (using lazy-load protocol) and returns a **binary** verdict against nine checks (feasibility, edge cases, testability, circularity, scope coherence, impact-analysis coverage, decomposition compliance, …).
 
 - **APPROVED** → pause for your approval, then continue.
 - **REJECTED** → the critic names the single change that would unblock the spec. Fix the requirements and re-run.
@@ -118,26 +118,30 @@ This follows the **YAML rail** step-by-step. Every step hard-blocks on failure �
 
 The implementer reports every step. The pattern critic verifies the report against the rail before approving.
 
+**When using `/run-pipeline`**, the implementer runs as a dedicated subagent (`@implementer`) in its own isolated context window. Lint output, test dumps, and file reads stay there — the orchestrator receives only the final IMPLEMENTER REPORT block. If you run `/implement-plan` manually, it runs in your current conversation context.
+
 ### Step 5 — GATE 2 (Pattern Critic)
 
 ```
 @pattern-critic
 ```
 
-Reads the diff against `.wiki/PATTERNS.md`, `DEPENDENCIES.md`, and `API.md`, verifies tests exist on disk, and runs `#code-analyzer` on changed files. Binary verdict.
+When using `/run-pipeline`, the orchestrator first runs `/gate-triage` in-context before invoking the pattern critic. Gate triage checks: test files present in diff, no lint suppression comments, IMPLEMENTER REPORT complete (all 11 steps listed), PATTERNS.md non-empty. Structural failures return immediately. If triage passes, `@pattern-critic` reads the diff against `.wiki/PATTERNS.md` (always), `DEPENDENCIES.md` (if new imports), and `API.md` (if exported symbols changed). It also verifies tests exist on disk and runs `#code-analyzer` on changed files. Binary verdict.
 
 - **APPROVED** → pause for your approval, then continue.
 - **REJECTED** → the critic lists the specific fixes in order. Run `/fix-rejection` — it reads the rejection log, shows you what it will change, applies only those fixes, re-runs the downstream verification steps, and resubmits to `@pattern-critic`. Do not re-run `/implement-plan` from scratch.
 
 **Mid-implementation scope expansion:** if `/implement-plan` discovers a file outside `Files to Change` that genuinely must be modified (typically because the impact analysis missed a consumer), it emits a `### SCOPE EXPANSION REQUEST` block and waits. You can approve inline or via `pipeline-overrides.yaml`. Approved expansions are recorded in the rejection log as `SCOPE_EXPANSION` entries and surface in the Pattern Critic's verdict — never silent.
 
-### Step 6 — MR Description (optional)
+### Step 6 — MR Description (optional, skipped by default)
 
 ```
 /create-mr-description
 ```
 
-Reads `requirements.md`, `implementation-plan.md`, and the git diff, then produces a structured MR description ready to paste into your PR. Run this after Gate 2 approval and before Scribe. Skip it if you prefer to write the description yourself.
+Reads `requirements.md`, `implementation-plan.md`, and the git diff, then produces a structured MR description ready to paste into your PR. Run this after Gate 2 approval and before Scribe.
+
+When using `/run-pipeline`, this step is **skipped by default**. To enable it automatically, set `generate_mr_description: true` in `pipeline-overrides.yaml`. Alternatively, type `mr` when the pipeline pauses at Gate 2 and it will run before proceeding to Scribe.
 
 ### Step 7 — Scribe
 
@@ -176,6 +180,7 @@ Everything in SemiPilot Pro is designed to be useful in isolation.
 | `@planner` | You already have a clean spec (yours or someone else's) and just want a concrete implementation plan. |
 | `@spec-critic` | You want a second opinion on whether a spec is feasible against your current architecture and data model. Great for PR-review-style spec reviews. |
 | `@pattern-critic` | Run it on any diff to catch pattern violations, banned dependencies, or complexity regressions. Works even if the diff wasn't produced by `/implement-plan`. |
+| `@implementer` | You have a plan and want to run the YAML rail in an isolated context window without a full pipeline run. Receives only the plan path; returns the IMPLEMENTER REPORT. |
 | `@scribe` | You made a change manually and want the `.wiki/` updated. Hand it the diff and the scribe appends the right entries. |
 
 ### Prompts
@@ -183,6 +188,7 @@ Everything in SemiPilot Pro is designed to be useful in isolation.
 | Prompt | Use on its own when… |
 |---|---|
 | `/run-pipeline` | You want to start a full cycle and let the system handle all handoffs. It pauses at Gate 1 and Gate 2 for your approval; everything else is automatic. |
+| `/gate-triage` | You want to validate the structural completeness of a requirements file (Gate 1) or diff + IMPLEMENTER REPORT (Gate 2) without running the full critic. Returns PASS or STRUCTURAL_FAIL in one response. |
 | `/refine-requirements` | Shortest path to a clean spec. Identical to invoking `@refiner`. |
 | `/create-implementation-plan` | You have an approved spec from any source (including hand-written) and want a plan without running Gate 1. |
 | `/implement-plan` | You already have a plan and want code written under the YAML rail — tests first, type-checked, linted, complexity-checked. |
@@ -500,7 +506,7 @@ Every agent file must have these four fields at the top (Golden Rule #3 from `co
 name: my-agent               # lowercase kebab-case
 description: one sentence, one responsibility — no "and"
 tools: [tool-a, tool-b]      # only tools that actually resolve to real files
-model: claude-sonnet-4-6     # Opus for gates, Sonnet for workers
+model: claude-sonnet-4-6     # Opus 4.8 for @pattern-critic only; Sonnet 4.6 for all others
 ```
 
 Do not list a tool that doesn't exist. The pattern critic will reject it.
@@ -630,6 +636,7 @@ cycle_id: 2025-03-12-checkout-fix   # must match the current cycle; otherwise th
 entry_point:
   start_at: plan                    # refine | spec-critic | plan | implement | pattern-critic | scribe
   pauses: at-gates                  # none | at-gates (default) | after-each-step
+  generate_mr_description: false    # default false — set true to auto-run /create-mr-description after Gate 2
   inline_inputs:
     plan: |
       # Implementation Plan: ...
@@ -783,3 +790,80 @@ The `## Impact Analysis` section in `requirements.md` is where most refactor fai
 **Why this exists:**
 
 Previous failures in real refactors (e.g., moving auth state from `useReducer` to a context provider) typically came from the refiner not tracing the call graph. Impact analysis is a mandatory step now, and the spec-critic rejects shallow analyses. If a side effect breaks in production, the rejection log should show whether the impact analysis caught it (the system worked) or missed it (the heuristics need strengthening).
+
+---
+
+## 19. Token efficiency and cost optimization
+
+The pipeline is designed so that expensive operations (large model calls, large context windows) are used only where they matter.
+
+### Model assignments
+
+| Agent | Model | Reason |
+|---|---|---|
+| `@pattern-critic` | Claude Opus 4.8 | Last line of defense before code reaches a PR. Diff analysis with nuanced plan-adherence checking. False APPROVED = bad code merged. |
+| `@spec-critic` | Claude Sonnet 4.6 | 9 checks with explicit pass/fail criteria against wiki reference material. Gate-triage pre-screens structural failures; Sonnet handles the remaining feasibility and coherence reasoning. |
+| `@refiner`, `@planner`, `@implementer`, `@scribe` | Claude Sonnet 4.6 | Research, writing, and coordination tasks. |
+| Orchestrator (`/run-pipeline`) | Claude Sonnet 4.6 | Routing only — no independent reasoning. |
+
+### Gate triage: the token-cost guardrail
+
+`/run-pipeline` runs `/gate-triage` in-context before each critic invocation. Gate triage performs only **mechanical** checks — no reasoning:
+
+**Before @spec-critic (Gate 1):**
+- All 8 required sections present in requirements.md?
+- Impact Analysis table has data rows?
+- Acceptance Criteria non-empty?
+- No `TBD` / `<todo>` placeholders in critical sections?
+
+**Before @pattern-critic (Gate 2):**
+- Test files present in diff?
+- No lint suppression comments in diff?
+- IMPLEMENTER REPORT has all 11 steps listed?
+- PATTERNS.md non-empty?
+
+A `STRUCTURAL_FAIL` returns immediately — the critic is never invoked. Structural failures are common in early cycles and are far cheaper to catch with a mechanical check than with a full critic invocation.
+
+### Why `@implementer` runs as a subagent
+
+The 11-step YAML rail produces a large amount of intermediate output: file reads, lint logs, type-check output, test runner output. Running `@implementer` as a subagent (via the `Agent` tool) isolates that context. The orchestrator sends the plan path in and receives only the IMPLEMENTER REPORT (~1–2 KB) back. Everything else stays in the implementer's context window.
+
+`@implementer` is now **self-contained**: it carries the full YAML rail directly and does not read `implement-plan.prompt.md` as a separate pre-flight step. The prompt file remains available for direct `/implement-plan` invocations.
+
+### Lazy wiki reads in critics and planner
+
+Agents no longer load all wiki files unconditionally before checking anything:
+
+- **`@spec-critic`**: always loads `DEPENDENCIES.md`; greps `DATA_MODELS.md` and `ARCH_DECISIONS.md` for spec terms first — full-reads only on hits.
+- **`@pattern-critic`**: always loads `PATTERNS.md`; loads `DEPENDENCIES.md` only when the diff has new imports; loads `API.md` only when the diff touches exported symbols.
+- **`@planner`**: reads `OVERVIEW.md` + `PATTERNS.md` always; reads other wiki files only if listed in the requirements' `Wiki References > Reads from`, or on a targeted search with ≥2 hits.
+
+On a large wiki, this reduces critic input tokens by 20–40% per invocation.
+
+### Context tracking between steps
+
+`/run-pipeline` writes a single structured line after each agent handoff and discards the full report body:
+
+```
+[STEP <N> <AGENT>] verdict=<...> artifact=<path> flags=<N>
+```
+
+Report prose, reasoning, and intermediate output are never carried forward. The orchestrator routes on facts.
+
+### No PATTERNS.md re-read in the implementer
+
+Step 10 (`wiki_pattern_check`) uses the `PATTERNS.md` content already loaded in Step 2 — no second file read.
+
+### Practical tips for keeping costs down
+
+**Write specific ideas.** "Add a `findByEmail` method to `UserRepository` returning `User | null`" goes straight to impact analysis. "Improve the user lookup" triggers clarifying questions.
+
+**Use `entry_point.start_at`.** If you already have a vetted plan, start at `implement`. If you have a clean diff, start at `pattern-critic`. Each skipped step is a full agent invocation saved.
+
+**Run `#patterns-seed` once.** An empty `PATTERNS.md` triggers structural failure at gate triage before either critic runs — but fixing it requires a full cycle. A seeded wiki means critics evaluate real violations, not bootstrap errors.
+
+**Prefer `/fix-rejection` over re-running `/implement-plan`.** Gate 2 rejection + fix-rejection (6 downstream steps) costs far less than re-running all 11 rail steps from scratch.
+
+**Use `pauses: none` for autonomous runs.** If you've pre-declared all expected overrides in `pipeline-overrides.yaml`, set `pauses: none` to eliminate the two round-trips for Dev approval. Every pause turn adds context to the orchestrator's window.
+
+**Enable MR description only when you need it.** `generate_mr_description: true` adds a `/create-mr-description` run after Gate 2. Omit it when you'll write the PR description yourself.

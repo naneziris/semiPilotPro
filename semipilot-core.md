@@ -251,6 +251,7 @@ cycle_id: <string>          # must match the current cycle; otherwise the file i
 
 entry_point:
   start_at: refine | spec-critic | plan | implement | pattern-critic | scribe
+  generate_mr_description: false  # default false — set to true to trigger /create-mr-description after Gate 2
   inline_inputs:             # provide artifacts directly when skipping the step that would have produced them
     requirements: |
       <inline markdown — used when start_at >= spec-critic and requirements.md does not exist>
@@ -325,30 +326,33 @@ The index schema:
 
 ---
 
-## Agent Inventory (5 total)
+## Agent Inventory (6 total)
 
 | Agent | Role | Model |
 |---|---|---|
-| `@refiner` | Requirements analysis and gap detection | Claude Opus 4.6 |
+| `@refiner` | Requirements analysis and gap detection | Claude Sonnet 4.6 |
 | `@planner` | Technical implementation plan | Claude Sonnet 4.6 |
-| `@spec-critic` | Pre-implementation feasibility gate | Claude Opus 4.6 |
-| `@pattern-critic` | Post-implementation standards gate | Claude Opus 4.6 |
+| `@spec-critic` | Pre-implementation feasibility gate | Claude Sonnet 4.6 |
+| `@pattern-critic` | Post-implementation standards gate | Claude Opus 4.8 |
+| `@implementer` | YAML rail executor — runs in isolated context window | Claude Sonnet 4.6 |
 | `@scribe` | Wiki + docs updater | Claude Sonnet 4.6 |
 
-**Critics run on Opus** because a bad gate call is the most expensive error in the pipeline.
-**Implementation is a prompt (`/implement-plan`), not an agent.** Agents reason and decide; implementation is file editing.
+**`@pattern-critic` runs on Opus 4.8** because it is the last line of defense before code reaches a PR — a false APPROVED is a code quality failure. All other agents, including `@spec-critic`, run on Sonnet 4.6. The spec critic's 9 checks are explicitly enumerated and verifiable against the wiki; gate-triage pre-screens structural failures so the spec critic only sees well-formed input. Sonnet is fully capable of the remaining feasibility and coherence reasoning.
+
+**`@implementer` runs as an agent (not in-context)** so lint logs, test dumps, and file reads stay in its isolated context window rather than growing the orchestrator's context. `/run-pipeline` invokes it via the `Agent` tool and receives only the IMPLEMENTER REPORT back.
 
 ### GHCP Model-Selection Note
 
-GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md` frontmatter. When invoking an agent directly, name the model explicitly in your request if the default model is not the one intended — e.g. *"Run `@spec-critic` with Claude Opus 4.6."* The model column above is the source of truth.
+GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md` frontmatter. When invoking an agent directly, name the model explicitly in your request if the default model is not the one intended — e.g. *"Run `@pattern-critic` with Claude Opus 4.8."* The model column above is the source of truth.
 
 ---
 
-## Prompt Inventory (7 total)
+## Prompt Inventory (8 total)
 
 | Prompt | Owns | Forbidden from |
 |---|---|---|
-| `/run-pipeline` | Chaining all pipeline steps; pausing at gates | Adding reasoning beyond what each step defines |
+| `/run-pipeline` | Chaining all pipeline steps; invoking gate-triage before each critic; pausing at gates; context-tracking between steps | Adding reasoning beyond what each step defines |
+| `/gate-triage` | Mechanical structural validation before a critic invocation; returns PASS or STRUCTURAL_FAIL | Reasoning about quality, coherence, or correctness — that is the critic's job |
 | `/refine-requirements` | Writing `requirements.md` | Making code changes |
 | `/create-implementation-plan` | Writing `implementation-plan.md` | Writing final code |
 | `/implement-plan` | Writing code + tests, following the YAML rail | Modifying the plan or requirements |
@@ -369,6 +373,64 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 | `#project-map` | Monorepo package + dependency map |
 
 All skills support `--dry-run`. All skill folder names match their YAML `name`.
+
+---
+
+## Token Efficiency
+
+The pipeline is designed to minimize unnecessary token consumption without weakening quality gates.
+
+### Model assignments
+
+| Role | Model | Reason |
+|---|---|---|
+| `@pattern-critic` | Claude Opus 4.8 | Last line of defense before merge. Diff analysis with plan adherence requires the strongest model. |
+| `@spec-critic` | Claude Sonnet 4.6 | 9 checks with explicit pass/fail criteria against wiki reference material. Gate-triage pre-screens structural failures. Sonnet is sufficient. |
+| Workers (`@refiner`, `@planner`, `@implementer`, `@scribe`) | Claude Sonnet 4.6 | Research, writing, and coordination tasks. |
+| Orchestrator (`/run-pipeline`) | Claude Sonnet 4.6 | Routing only — no independent reasoning. |
+
+### Gate triage: structural pre-screening before critics
+
+`/run-pipeline` runs `/gate-triage` in-context before each critic invocation. Gate triage performs mechanical checks only (section headers present, test files in diff, no suppression comments, PATTERNS.md non-empty). If the artifact has a structural failure, the triage returns `STRUCTURAL_FAIL` immediately — no critic is invoked. Structural failures are far more common than reasoning failures in early cycles, and they cost the same Opus invocation to catch without this filter.
+
+### Context isolation: `@implementer` as a subagent
+
+`/run-pipeline` invokes `@implementer` via the `Agent` tool. The 11-step YAML rail — including all lint output, test dumps, and file reads — stays in the implementer's isolated context window. The orchestrator receives only the final IMPLEMENTER REPORT block (~1–2 KB). Without this separation, the orchestrator's context grows by 20–50 KB per implementation run before `@pattern-critic` even starts.
+
+### Lazy wiki reads in critics and planner
+
+Critics and the planner do not load all wiki files unconditionally:
+- **`@spec-critic`**: always loads `DEPENDENCIES.md`; loads `DATA_MODELS.md` and `ARCH_DECISIONS.md` only when the spec's In Scope terms match content in those files (grep-first).
+- **`@pattern-critic`**: always loads `PATTERNS.md`; loads `DEPENDENCIES.md` only when the diff contains new imports; loads `API.md` only when the diff touches exported symbols.
+- **`@planner`**: reads `OVERVIEW.md` + `PATTERNS.md` always; reads other wiki files only if listed in the requirements' `Wiki References > Reads from`, or if a targeted search finds ≥2 relevant hits.
+
+### Context tracking between steps
+
+After each agent's HANDOFF block, `/run-pipeline` writes a single structured line to its working context and discards the full report body:
+`[STEP <N> <AGENT>] verdict=<...> artifact=<path> flags=<N>`
+Report prose, reasoning, and intermediate output are never carried forward. The orchestrator routes on facts, not narrative.
+
+### `@implementer`: self-contained agent (no prompt file pre-load)
+
+`@implementer` contains the full 11-step YAML rail directly. When invoked via the `Agent` tool, it does not read `implement-plan.prompt.md` as a separate pre-flight step. The prompt file remains available for direct `/implement-plan` invocations (manual, non-pipeline use).
+
+Step 10 (`wiki_pattern_check`) uses the `PATTERNS.md` content already loaded in Step 2 — no re-read.
+
+### Conditional clarifying questions
+
+`@refiner` skips its upfront question round when the idea names specific files or functions and the wiki provides sufficient context. Residual unknowns go into `Open Questions` instead. This eliminates one round-trip per cycle on well-scoped requests.
+
+### Early exit on empty wiki
+
+`@spec-critic` and `@pattern-critic` check that required wiki files are non-empty before reading them. An empty wiki triggers an immediate REJECT rather than a full file-read pass that finds nothing.
+
+### Error output truncation
+
+Hard-block error output in IMPLEMENTER REPORT is capped at 50 lines. Full output is preserved in `.github/implementation-progress.json` for debugging. This prevents large compiler or test runner dumps from bloating the report the orchestrator has to process.
+
+### MR description: opt-in
+
+`/create-mr-description` is skipped by default. Enable it by setting `generate_mr_description: true` in `pipeline-overrides.yaml` or by typing `mr` after Gate 2 approval.
 
 ---
 
