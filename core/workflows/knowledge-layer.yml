@@ -1,0 +1,59 @@
+name: Knowledge Layer
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Blocking: cards must parse, resolve, and match the committed manifest.
+  # Zero dependencies — no install step, runs in seconds.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate cards
+        run: node scripts/kb/kb-validate.mjs
+      - name: Manifest up to date
+        run: node scripts/kb/kb-index.mjs --check
+
+  # Warning-only for now (continue-on-error): flags card edges that no
+  # longer match the real import graph. Flip to blocking once the noise
+  # floor is known (remove continue-on-error).
+  drift:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+      - name: Install (typescript needed by kb-drift)
+        run: npm install --no-audit --no-fund
+      - name: Drift check (imports vs declared card edges)
+        run: node scripts/kb/kb-drift.mjs
+
+  # Non-blocking nag: PR touches card-owned code without touching the card.
+  # Output lands in the job step summary.
+  guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Staleness nag
+        run: |
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+            | node scripts/kb/kb-guard.mjs

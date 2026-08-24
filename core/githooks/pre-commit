@@ -1,0 +1,23 @@
+#!/bin/sh
+# Knowledge-layer pre-commit gate.
+#
+# Activate once per clone:
+#   git config core.hooksPath .githooks
+#
+# Blocks the commit when cards are malformed or the manifest is stale
+# (both checks are zero-dependency and run in ~1s). The staleness nag
+# (card-owned code changed without its card) prints but never blocks —
+# CI shows the same nag in the PR step summary.
+#
+# Bypass in a genuine emergency with: git commit --no-verify
+
+set -e
+
+node scripts/kb/kb-validate.mjs
+node scripts/kb/kb-index.mjs --check || {
+  echo ""
+  echo "pre-commit: manifest is stale — run 'npm run kb:index' and stage docs/cards/manifest.json"
+  exit 1
+}
+
+git diff --cached --name-only | node scripts/kb/kb-guard.mjs
