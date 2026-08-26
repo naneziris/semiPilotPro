@@ -5,6 +5,38 @@ Practical answers for day-to-day use of the knowledge layer. Deeper context:
 
 ---
 
+## How do I start a task — `/run-pipeline`, `/refine-requirements`, or `@refiner`?
+
+All three are valid doors into the same flow; pick by how much routing you
+want to do yourself:
+
+- **`/run-pipeline <idea>`** (VS Code chat) — the one-command entry. It
+  runs the entire flow (refine → Gate 1 → plan → implement → Gate 2 →
+  scribe), invoking each stage as a subagent and routing on their
+  `### HANDOFF:` blocks automatically. It pauses only where a human
+  belongs: tag confirmation, clarifying questions, and the two gates.
+  **If in doubt, start here.**
+- **`/refine-requirements <idea>`, then follow the handoffs** — manual
+  mode. Each stage ends with a `### HANDOFF:` block naming exactly what to
+  invoke next (`@spec-critic`, `/create-implementation-plan`,
+  `/implement-plan`, `@pattern-critic`, `@scribe`); you are the router.
+  Use this to enter mid-pipeline or inspect between stages.
+- **`@refiner <idea>`** — identical to `/refine-requirements`. The prompt
+  is a thin wrapper that invokes that same agent with the task context;
+  the `.agent.md` file is the single source of truth for the process
+  (same for `/create-implementation-plan` vs `@planner`). Two doors, one
+  behavior.
+
+In **Copilot CLI** (no prompt-file support): only the third form exists —
+drive the agents manually in stage order (refiner → spec-critic → planner →
+implementer → pattern-critic → scribe), following each exit HANDOFF block.
+Don't assume `/run-pipeline`'s automated subagent routing works there
+until you've tested it.
+
+The `### HANDOFF:` blocks are a text convention, not a mechanism: an agent
+that emits one has STOPPED. Nothing runs next unless you (manual mode) or
+the `/run-pipeline` orchestrator invokes it.
+
 ## What steps do I take when I pull or fetch new changes?
 
 1. **`npm run kb:catchup`** — zero tokens. It diffs your personal baseline

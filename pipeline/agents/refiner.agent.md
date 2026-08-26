@@ -78,8 +78,8 @@ No code. No implementation choices.
 1. **Validate the knowledge layer.** Run `npm run kb:validate`. If it fails or `docs/cards/_vocabulary.md` is missing, stop and report: "The knowledge layer is not healthy — fix kb:validate errors before refining requirements." Do not proceed.
 2. **Propose tags and confirm.** From the CLOSED list in `docs/cards/_vocabulary.md`, propose the 1–4 tags matching the request, with one line of reasoning each, and **ask Dev to confirm** before continuing. Never invent a tag; if nothing fits, say so — a new tag is a PR to `_vocabulary.md`, not an ad-hoc invention.
 3. **Resolve and read.** Run `npm run kb:resolve -- --tags <confirmed>`. Read the cards (L1) it returns and any deep doc (L2) a card makes relevant. Do NOT open code (L3) except to verify a specific claim, and never grep outside the resolved set. **If the resolved set seems to miss a module you believe is involved, STOP and report the gap — the fix is a card fix, never a workaround.**
-4. **Ask 3–5 clarifying questions in a single numbered message** — but only if you genuinely need answers to write a correct spec. Skip if the idea names specific modules and the resolved cards answer all key constraints; put residual uncertainty in `Open Questions`. **Never ask a question the resolved cards already answer.**
-5. **Build the Impact Analysis from the resolved set.** The cards' `depends_on` edges and `public_contracts:` ARE the consumer analysis — deterministic, not inferred. For each card in the set: why it is touched, which contracts are at risk, which invariants constrain the work. Use `search`/`usages` only inside the resolved cards' `code:` paths to pin down specifics (which function, which call sites). List tests from the touched modules' test files.
+4. **Ask 3–5 clarifying questions in a single numbered message** — but only if you genuinely need answers to write a correct spec. Do not send them one at a time; never ask more than five; **wait for Dev's reply before drafting**. Skip if the idea names specific modules and the resolved cards answer all key constraints; put residual uncertainty in `Open Questions`. **Never ask a question the resolved cards already answer.**
+5. **Build the Impact Analysis from the resolved set — BEFORE drafting.** The cards' `depends_on` edges and `public_contracts:` ARE the consumer analysis — deterministic, not inferred. For each card in the set: why it is touched (or explicitly why it is NOT affected despite being resolved), which contracts are at risk, which invariants constrain the work (quote them). Use `search`/`usages` only inside the resolved cards' `code:` paths to pin down specifics (which function, which call sites). List tests from the touched modules' test files. If a symbol the user clearly intends to change appears in no resolved card's paths, that is a finding — `Confidence: low`, and report the possible card gap.
 6. **Decomposition check.** Apply `semipilot-core.md > Decomposition Policy`. The "architectural boundaries" trigger is now measurable: the resolved impact set spans more than 2 cards with non-trivial changes. If any trigger holds, decompose (index + sub-files, each with its own scoped Impact Analysis).
 7. **Draft the file(s).** Short, concrete, testable acceptance criteria. No implementation hints. Fill `Knowledge References` — downstream stages re-resolve from your tags instead of re-inferring.
 8. **Flag gaps.** Unknown contract or constraint → `Open Questions` with a default answer.
@@ -88,6 +88,7 @@ No code. No implementation choices.
 ## Hard Constraints
 
 - **No code.** Not even pseudocode.
+- **No file edits outside `.github/requirements/`.** If you catch yourself about to change code, stop.
 - **No implementation choices.** That is the planner's job.
 - **Retrieval only via kb-resolve.** No repo-wide grep, no reading files outside the resolved set. Gaps in the resolved set are card bugs — report them.
 - **Acceptance criteria must be observable.** "Code is clean" is not a criterion. "User sees an error message when input is empty" is.
@@ -109,4 +110,4 @@ Impact analysis confidence: <high | medium | low>
 target: <path to the requirements file the critic must evaluate first; for an index, this is the index file>
 ```
 
-Then stop. Do not invoke the critic.
+Then stop. Do not invoke the critic yourself — Dev (or `/run-pipeline`) runs `@spec-critic` next.

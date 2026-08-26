@@ -32,8 +32,33 @@ drive the loop yourself:
 
 ## Flow B — full pipeline (installed with `--with-pipeline`)
 
-You are handed a requirement. Run `/run-pipeline` (or invoke the steps
-manually) and interact at exactly these points:
+**How to start — pick ONE entry point, don't mix them mid-cycle:**
+
+1. **`/run-pipeline <idea>` (VS Code chat — the default).** One command runs
+   the whole flow below: it invokes each stage as a subagent, routes on
+   their `### HANDOFF:` blocks automatically, and pauses only where a human
+   belongs — tag confirmation, clarifying questions, Gate 1, Gate 2. If in
+   doubt, start here.
+2. **Manual, stage by stage (VS Code chat).** Run the numbered steps below
+   yourself; each stage ends with a `### HANDOFF:` block naming exactly
+   what to invoke next. Use this when entering mid-pipeline (see escape
+   hatches) or when you want to inspect between stages.
+3. **Copilot CLI.** No prompt-file support, so `/run-pipeline` and the
+   `/…` commands are unavailable as slash commands. Drive the six agents
+   manually in stage order (`/agent` refiner → spec-critic → planner →
+   implementer → pattern-critic → scribe) — the agent files are
+   self-contained role definitions, and each exit `### HANDOFF:` block
+   tells you what to run next; you are the router. For prompt-only stages
+   (`gate-triage`, `fix-rejection`, `write-tests`, …), tell the agent to
+   read and execute the `.prompt.md` (the `AGENTS.md` router says this
+   too).
+
+Note on `/refine-requirements` vs `@refiner` (and
+`/create-implementation-plan` vs `@planner`): the prompt is a thin wrapper
+that invokes that same agent with the task context — the agent file is the
+single source of truth for the process. Same behavior through either door.
+
+You are handed a requirement. The full flow, with your interaction points:
 
 ```
 you: /refine-requirements <the raw requirement>

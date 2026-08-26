@@ -1,6 +1,6 @@
 ---
 description: Execute an implementation-plan.md by following the YAML rail. TDD, no shortcuts, every step reported.
-model: GPT-4.1 (copilot)
+model: Claude Sonnet 4.6 (copilot)
 tools: ["search", "usages", "edit", "runCommands"]
 ---
 

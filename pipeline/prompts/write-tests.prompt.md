@@ -1,6 +1,6 @@
 ---
 description: Write unit tests for an existing file, following the repo's documented test conventions. No pipeline required — outputs a report ready for @pattern-critic.
-model: GPT-4.1 (copilot)
+model: Claude Sonnet 4.6 (copilot)
 tools: ["search", "usages", "edit", "runCommands"]
 ---
 

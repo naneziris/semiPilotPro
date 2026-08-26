@@ -1,6 +1,6 @@
 ---
 description: Apply the pattern-critic's required fixes after a Gate 2 rejection, re-run affected rail steps, and resubmit to @pattern-critic.
-model: GPT-4.1 (copilot)
+model: Claude Sonnet 4.6 (copilot)
 tools: ["search", "usages", "edit", "runCommands"]
 ---
 
