@@ -78,6 +78,27 @@ only, and card updates ride in the same PR as code changes.
   warning-only (`continue-on-error`) — remove that line once it has been
   quiet for a while; `guard` never blocks, it nags in the step summary.
 
+## Using Copilot CLI instead of VS Code chat
+
+Everything works in Copilot CLI except prompt files — the CLI does not (yet)
+pick up `.github/prompts/*.prompt.md` as slash commands:
+
+- **Works as-is:** `.github/agents/*.agent.md` (invoke via `/agent`, by
+  name, or `copilot --agent <name>`), `.github/copilot-instructions.md`,
+  `AGENTS.md` (no VS Code setting needed), path-scoped
+  `.github/instructions/*.instructions.md`, `.github/skills/code-analyzer`,
+  and all `kb:*` scripts / the hook / CI (editor-agnostic).
+- **Prompt-file gap, bridged by the router:** the installed `AGENTS.md`
+  block tells the agent to read and execute the matching
+  `.github/prompts/*.prompt.md` when you ask for a workflow in natural
+  language ("sync the cards", "run the pipeline"). You can always be
+  explicit: "Read `.github/prompts/sync-cards.prompt.md` and follow it."
+- **Verify on first use:** whether the CLI honors agent `model:` pins (the
+  Sonnet-critic / Opus-gate split — check with `/model`), and whether the
+  `/run-pipeline` orchestrator's subagent handoffs work in the CLI's agent
+  runtime. If they don't, run the pipeline steps manually via the documented
+  partial entry points.
+
 ## Solo / POC mode (adopting before the team is on board)
 
 Running the layer alone for a sprint while teammates commit without touching
@@ -103,9 +124,11 @@ cards is a supported mode:
 - `kb-drift` is TS/JS-only as shipped (uses the repo's `typescript`
   package). Swapping in another language means replacing two functions in
   `kb-drift.mjs` (`importSpecifiers`, `resolveSpecifier`).
-- The pipeline files assume GitHub Copilot in VS Code. Claude Code and
-  other agents still benefit — `AGENTS.md` routes them to the same
-  knowledge layer — but `.agent.md`/`.prompt.md` mechanics are Copilot's.
+- The pipeline files assume GitHub Copilot (VS Code chat, or the CLI — see
+  "Using Copilot CLI" above; the CLI lacks `.prompt.md` support, bridged via
+  the `AGENTS.md` router). Claude Code and other agents still benefit —
+  `AGENTS.md` routes them to the same knowledge layer and playbooks — but
+  `.agent.md`/`.prompt.md` mechanics are Copilot's.
 - Agent `model:` pins (Sonnet 4.6 / Opus 4.8) carry over from the team
   standard; GHCP may ignore the field — name the model when invoking a
   critic if it matters.
