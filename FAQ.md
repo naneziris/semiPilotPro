@@ -87,6 +87,59 @@ When the trial convinces you: delete the `.git/info/exclude` entries,
 commit everything, and push — the hook config (`git config core.hooksPath
 .githooks`) is the only per-clone step teammates need.
 
+## How do I run the `kb:*` scripts without committing the `package.json` entries?
+
+The `npm run kb:*` entries are pure aliases — the scripts have zero npm
+dependencies (Node built-ins only), so revert the installer's edit
+(`git checkout -- package.json`) and call them directly:
+
+| Instead of | Run |
+|---|---|
+| `npm run kb:validate` | `node scripts/kb/kb-validate.mjs` |
+| `npm run kb:index` | `node scripts/kb/kb-index.mjs` |
+| `npm run kb:check` | `node scripts/kb/kb-index.mjs --check` |
+| `npm run kb:resolve -- --tags a,b` | `node scripts/kb/kb-resolve.mjs --tags a,b` |
+| `npm run kb:drift` | `node scripts/kb/kb-drift.mjs` |
+| `npm run kb:guard` | `node scripts/kb/kb-guard.mjs` |
+| `npm run kb:catchup` | `node scripts/kb/kb-catchup.mjs` |
+| `npm run kb:catchup -- --mark` | `node scripts/kb/kb-catchup.mjs --mark` |
+
+Note the `--` vanishes — it is an npm-ism for passing arguments through;
+direct `node` takes them natively. The pre-commit hook already calls
+`node scripts/kb/...` directly and never touches `npm run`, so it keeps
+working; `kb-drift` finds `typescript` in the repo's existing
+`node_modules`, also unaffected.
+
+Alternatives, if typing the paths gets old:
+
+- **Local wrapper** at `scripts/kb/kb` (the directory is already in
+  `.git/info/exclude` during a trial, so it stays local for free):
+
+  ```bash
+  #!/bin/sh
+  # usage: scripts/kb/kb validate|index|check|resolve|drift|guard|catchup [args...]
+  cmd="$1"; shift
+  [ "$cmd" = "check" ] && exec node scripts/kb/kb-index.mjs --check
+  exec node "scripts/kb/kb-$cmd.mjs" "$@"
+  ```
+
+  `chmod +x scripts/kb/kb`, then e.g. `scripts/kb/kb catchup --mark`.
+- **Shell aliases** in your `~/.zshrc`/`~/.bashrc`
+  (e.g. `alias kbv='node scripts/kb/kb-validate.mjs'`) — machine-local,
+  repo-independent, but only work from the repo root.
+- **Not recommended:** keeping the `package.json` edit uncommitted (one
+  `git add .` away from leaking; constant `git status` noise) or
+  `git update-index --skip-worktree package.json` (silently skips
+  teammates' real `package.json` changes on pull).
+
+One caveat: the installed prompts and docs say `npm run kb:*`, so an agent
+following e.g. `/sync-cards` will hit "missing script". Agents usually
+recover by falling back to direct `node`, but don't rely on it — add one
+line to the repo's `AGENTS.md` (also local-only during a trial):
+"`npm run kb:*` aliases are not installed — invoke the scripts directly as
+`node scripts/kb/<script>.mjs`." Delete the line when the team adopts the
+kit and the `package.json` entries get committed.
+
 ## Does any of this send data anywhere?
 
 No. Every `kb:*` script, the hook, and the installer are deterministic,
