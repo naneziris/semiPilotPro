@@ -132,7 +132,11 @@ cards is a supported mode:
 - Agent `model:` pins (Sonnet 4.6 / Opus 4.8) carry over from the team
   standard; GHCP may ignore the field — name the model when invoking a
   critic if it matters.
-- The two human gates and the card-review batches are not optional
+- The pipeline's critics run autonomously by default (rejections
+  auto-loop through the fix mechanisms, escalating to you only when a loop
+  can't converge), but the three human anchors that remain — the tag
+  confirmation at the start, the spec approval after Gate 1, and the
+  commit review at the end — plus the card-review batches are not optional
   ceremony. Every shortcut here converts directly into confidently wrong
   retrieval later.
 

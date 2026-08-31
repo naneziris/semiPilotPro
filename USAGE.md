@@ -36,9 +36,14 @@ drive the loop yourself:
 
 1. **`/run-pipeline <idea>` (VS Code chat — the default).** One command runs
    the whole flow below: it invokes each stage as a subagent, routes on
-   their `### HANDOFF:` blocks automatically, and pauses only where a human
-   belongs — tag confirmation, clarifying questions, Gate 1, Gate 2. If in
-   doubt, start here.
+   their `### HANDOFF:` blocks automatically, auto-loops critic rejections
+   through the fix mechanisms (max 2 loops per gate, then it escalates to
+   you), and pauses only where a human belongs — tag confirmation,
+   clarifying questions, and your spec approval after Gate 1. Gate 2
+   APPROVED flows straight to the scribe; your diff review happens at
+   commit time, briefed by the PIPELINE COMPLETE block. If in doubt, start
+   here. (Prefer the old approve-at-both-gates behavior? Set
+   `entry_point.pauses: at-gates` in `.github/pipeline-overrides.yaml`.)
 2. **Manual, stage by stage (VS Code chat).** Run the numbered steps below
    yourself; each stage ends with a `### HANDOFF:` block naming exactly
    what to invoke next. Use this when entering mid-pipeline (see escape
@@ -65,14 +70,18 @@ you: /refine-requirements <the raw requirement>
  1. @refiner  — proposes tags        → YOU CONFIRM (one glance)
               — may ask ≤5 questions → YOU ANSWER
               → .github/requirements/requirements.md
- 2. @spec-critic (GATE 1)            → YOU APPROVE the spec (or it kicks back)
+ 2. @spec-critic (GATE 1)            → runs by itself; REJECTED auto-loops
+              — to the refiner (max 2×) — on APPROVED → YOU APPROVE the spec
  3. /create-implementation-plan      → .github/implementation-plan.md
- 4. /implement-plan (11-step rail)   → code + tests
+ 4. /implement-plan (11-step rail)   → code + tests; lint/type/test steps
+              — self-fix (max 2 reported rounds each) before blocking
               — scope-expansion asks → YOU APPROVE/DECLINE if raised
- 5. @pattern-critic (GATE 2)         → YOU APPROVE the diff
-              — REJECTED → /fix-rejection loops back to 5
- 6. @scribe   — updates cards/manifest/ADRs/changelog, verifies kb suite
- 7. you: git commit                  → pre-commit hook = final backstop
+ 5. @pattern-critic (GATE 2)         → runs by itself; REJECTED auto-runs
+              — /fix-rejection and resubmits (max 2×), then escalates
+ 6. @scribe   — runs right after Gate 2 APPROVED; updates cards/manifest/
+              — ADRs/changelog, verifies kb suite
+ 7. you: git commit                  → review the PIPELINE COMPLETE block
+              — (Gate 2 flags, scribe gaps) → pre-commit hook = final backstop
 ```
 
 Trivial change (typo, rename, version bump)? Skip the pipeline: edit, test,

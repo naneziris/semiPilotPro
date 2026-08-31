@@ -35,12 +35,12 @@ Copilot operates as a **senior engineering collaborator**, not a tool or assista
 You can drive the pipeline in two ways:
 
 - **Manual** — invoke each step yourself in order. Gives you full control between steps.
-- **Auto** — run `/run-pipeline` once. It chains all steps automatically and pauses only at the two human sync gates (plus the tag-confirmation ask inside step 1).
+- **Auto** — run `/run-pipeline` once. It chains all steps automatically, including the critics and the scribe — no step waits to be prompted. Critic rejections loop automatically through the fix mechanisms (refiner for Gate 1, `/fix-rejection` for Gate 2), bounded by a retry budget (default 2 per gate). The human has exactly ONE mid-run approval: after `@spec-critic` returns APPROVED, Dev confirms the spec before planning — the critics verify feasibility and conventions, but only Dev can verify intent, and this is the last point where a misread idea is cheap to fix. Everything downstream (plan → implement → Gate 2 → scribe) runs without pausing. Dev is otherwise involved at the start (idea + tag confirmation), on **escalation** (retry budget exhausted, non-converging rejections, hard blocks, scope expansion), and at the final commit review. Other modes via `entry_point.pauses` in `pipeline-overrides.yaml`: `at-gates` (legacy — approve after both gates, ask on every rejection), `after-each-step`, `none` (fully autonomous, no spec approval either).
 
 ```
 User Idea
   │  ┌─────────────────────────────┐
-  │  │ /run-pipeline (optional)    │  chains all steps; pauses at gates
+  │  │ /run-pipeline (optional)    │  chains all steps; escalates on failure
   │  └─────────────────────────────┘
   ▼
 ┌──────────────────────────────────────────┐
@@ -51,10 +51,11 @@ User Idea
   ▼
 ┌──────────────────────────────────────────┐
 │ 2. @spec-critic   (GATE 1)               │  reads requirements + resolved cards
-│    APPROVED → continue                   │  + docs/decisions.md + docs/dependencies.md
-│    REJECTED → back to /refine-requirements│
+│    APPROVED → Dev approves the spec      │  + docs/decisions.md + docs/dependencies.md
+│    REJECTED → auto-loop to refiner       │
+│    (max 2 loops, then ESCALATE to Dev)   │
 └──────────────────────────────────────────┘
-  │ (human sync: approve spec)
+  │ (human sync: approve spec — the intent check)
   ▼
 ┌──────────────────────────────────────────┐
 │ 3. /create-implementation-plan           │  re-resolves from the spec's tags
@@ -69,10 +70,11 @@ User Idea
   ▼
 ┌──────────────────────────────────────────┐
 │ 5. @pattern-critic   (GATE 2)            │  reads diff + conventions corpus
-│    APPROVED → continue                   │  + card invariants + kb-guard evidence
-│    REJECTED → /fix-rejection             │
+│    APPROVED → continue automatically     │  + card invariants + kb-guard evidence
+│    REJECTED → auto-run /fix-rejection    │
+│    (max 2 loops, then ESCALATE to Dev)   │
 └──────────────────────────────────────────┘
-  │ (human sync: approve diff)
+  │ (no human pause on APPROVED)
   ▼
 ┌──────────────────────────────────────────┐
 │ 6. /create-mr-description  (optional)    │  → structured MR description
@@ -89,14 +91,27 @@ Dev commits — the .githooks/pre-commit hook re-runs kb:validate + kb:check
 as the final deterministic backstop.
 ```
 
-### Human Sync Gates (exactly 2 per successful cycle, plus tag confirmation)
+### Human Involvement (default `pauses: auto`)
 
-- **Inside step 1** — Dev confirms the proposed vocabulary tags (auditable retrieval, not a full gate).
-- **After Spec Critic** — Dev approves the spec before planning.
-- **After Pattern Critic** — Dev approves the diff before Scribe runs.
-- **On rejection** — Dev decides whether to retry or abandon.
+A successful cycle involves the human exactly three times:
 
-No other human pauses. When using `/run-pipeline`, internal handoffs are automatic.
+- **Inside step 1** — Dev confirms the proposed vocabulary tags (auditable retrieval).
+- **After Gate 1 APPROVED** — Dev approves the spec before planning. This is the intent check: the critic has verified the spec is feasible, well-formed, and card-covered, but a spec can pass all nine checks and still not be what Dev meant. This is the last point where that costs one file edit instead of a full cycle.
+- **At the end** — Dev reviews the `PIPELINE COMPLETE` block (Gate 2 flags, scribe gaps, rejection history) and commits. The pre-commit hook is the deterministic backstop.
+
+Everything else is automatic: the critics run without being prompted, Gate 2 APPROVED flows straight to the scribe, and the scribe runs without pausing. Critic REJECTED verdicts loop automatically: Gate 1 → `@refiner` revises the requirements against the verdict's `Required fix`; Gate 2 → `/fix-rejection` applies the logged fixes. Each gate gets at most `max_auto_retries` loops (default 2) per cycle.
+
+**Escalation — when the human IS pulled in mid-run:**
+
+- A gate's retry budget is exhausted, or the same rejection repeats verbatim (the loop is not converging).
+- `/implement-plan` or `/fix-rejection` hard-blocks on a failing rail step.
+- The implementer raises a `### SCOPE EXPANSION REQUEST` with no matching override — scope is always Dev's call.
+- The scribe cannot get kb:validate / kb:guard clean after its edits.
+- A malformed report or undefined condition.
+
+On escalation Dev chooses: **retry**, **revise**, **override** (declared in `pipeline-overrides.yaml`, logged), or **abandon**.
+
+Other modes: `pauses: at-gates` restores the old approve-at-each-gate behavior (both gates, ask on every rejection); `after-each-step` pauses after every agent; `none` drops the spec approval too — fully autonomous, for override-driven runs.
 
 ---
 
@@ -128,15 +143,29 @@ implementation_rail:
     block_on_failure: true
 
   - step: lint
-    description: Run the repo's lint command. Fix every error. No suppression comments.
+    command_source: "package.json scripts first, then copilot-instructions.md > Commands"
+    description: >
+      Run the repo's lint command. Self-fix loop, max 2 rounds, every round
+      reported. No suppression comments.
+    max_fix_rounds: 2
     block_on_failure: true
 
   - step: type_check
-    description: Run the repo's typecheck command. Fix every error. No suppression comments.
+    command_source: "package.json scripts first, then copilot-instructions.md > Commands"
+    description: >
+      Run the repo's typecheck command. Self-fix loop, max 2 rounds, every round
+      reported. No suppression comments.
+    max_fix_rounds: 2
     block_on_failure: true
 
   - step: unit_tests
-    description: Run the repo's full test suite. Post verbatim output on any failure.
+    command_source: "package.json scripts first, then copilot-instructions.md > Commands"
+    description: >
+      Run the repo's full test suite. Self-fix loop, max 2 rounds, every round
+      reported. Fix the CODE, never weaken a test; a pre-existing test whose
+      expectations would have to change is an immediate hard block. Post verbatim
+      output on any remaining failure.
+    max_fix_rounds: 2
     block_on_failure: true
 
   - step: explain_test_changes
@@ -162,7 +191,9 @@ implementation_rail:
 ```
 
 **`block_on_failure: true`** — the implementer stops and posts the error verbatim. It does not skip ahead or silently retry.
-**`flag_for_review: true`** — the implementer proceeds but attaches a warning the human must acknowledge during Gate 2.
+**`max_fix_rounds`** — verification steps (lint, type_check, unit_tests) get bounded self-fix loops: run → fix → re-run, at most that many times, with every round logged in the IMPLEMENTER REPORT's fix-loop log. Fixing is never silent, never a suppression, and never a weakened test. The block fires only after the rounds are exhausted.
+**`command_source`** — verification commands come from the repo's own package.json scripts (`lint`, `typecheck`/`type-check`/`types`, `test`) when present, falling back to `.github/copilot-instructions.md > Commands`. If neither names a command for a step, the step is noted as skipped — never guessed.
+**`flag_for_review: true`** — the implementer proceeds but attaches a warning surfaced to the human in the `PIPELINE COMPLETE` review block (or during Gate 2 when running with `pauses: at-gates`).
 
 ### Checkpoint File (`.github/implementation-progress.json`)
 
@@ -261,6 +292,8 @@ cycle_id: <string>          # must match the current cycle; otherwise the file i
 
 entry_point:
   start_at: refine | spec-critic | plan | implement | pattern-critic | scribe
+  pauses: auto | at-gates | after-each-step | none   # default auto — critics auto-run; one spec approval after Gate 1
+  max_auto_retries: 2        # auto-fix loops per gate per cycle before escalating to Dev
   generate_mr_description: false  # default false — set to true to trigger /create-mr-description after Gate 2
   inline_inputs:             # provide artifacts directly when skipping the step that would have produced them
     requirements: |
@@ -361,7 +394,7 @@ GitHub Copilot in VS Code may ignore the `model:` field in an agent's `.agent.md
 
 | Prompt | Owns | Forbidden from |
 |---|---|---|
-| `/run-pipeline` | Chaining all pipeline steps; invoking gate-triage before each critic; pausing at gates; context-tracking between steps | Adding reasoning beyond what each step defines |
+| `/run-pipeline` | Chaining all pipeline steps; invoking gate-triage before each critic; auto-looping rejections through the fix mechanisms within the retry budget; escalating to Dev; context-tracking between steps | Adding reasoning beyond what each step defines |
 | `/gate-triage` | Mechanical structural validation before a critic invocation; returns PASS or STRUCTURAL_FAIL | Reasoning about quality, coherence, or correctness — that is the critic's job |
 | `/refine-requirements` | Writing `requirements.md` (tags → confirm → kb-resolve) | Making code changes |
 | `/create-implementation-plan` | Writing `implementation-plan.md` | Writing final code |
@@ -433,7 +466,7 @@ Hard-block error output in IMPLEMENTER REPORT is capped at 50 lines. Full output
 
 ### MR description: opt-in
 
-`/create-mr-description` is skipped by default. Enable it by setting `generate_mr_description: true` in `pipeline-overrides.yaml` or by typing `mr` after Gate 2 approval.
+`/create-mr-description` is skipped by default. Enable it by setting `generate_mr_description: true` in `pipeline-overrides.yaml` or by typing `mr` after the pipeline completes.
 
 ---
 

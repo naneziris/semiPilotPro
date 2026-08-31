@@ -4,13 +4,14 @@ Everything needed to make a repository AI-ready: a deterministic **knowledge
 layer** (module cards + closed vocabulary + zero-dependency scripts that
 retrieve, validate, and drift-check it), the **enforcement** that keeps it
 true (pre-commit hook, CI workflow, Copilot instruction files), and
-optionally the **SemiPilot pipeline** (requirements → two critic gates →
+optionally the **SemiPilot pipeline** (requirements → two self-running critic gates →
 plan → implement → scribe) rewired to run on that layer.
 
 Extracted from a real production installation and generalized for any repo.
 Read in this order: `INSTALL.md` (how to adopt), `USAGE.md` (the day-to-day
-flow + what is scripted vs. AI and what costs tokens), `PLAYBOOK.md` (the
-design reasoning). Adopting in a large workspace monorepo? `MONOREPO.md` is
+flow + what is scripted vs. AI and what costs tokens), `RETRIEVAL.md` (how
+cards, the vocabulary, and the manifest turn tags into an exact reading list —
+the progressive-disclosure mechanics), `PLAYBOOK.md` (the design reasoning). Adopting in a large workspace monorepo? `MONOREPO.md` is
 the phased, size-proof rollout plan.
 
 ## Quick start

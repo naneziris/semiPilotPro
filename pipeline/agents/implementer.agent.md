@@ -122,23 +122,27 @@ Any approved scope expansion appears in the IMPLEMENTER REPORT under `Scope expa
 - → Checkpoint: mark `write_code` as `"done"`.
 
 ## Step 5: lint
-- Run the repo's lint command (named in `.github/copilot-instructions.md > Commands`). Fix every error. Warnings may remain only if the plan explicitly permits it.
-- **Hard block:** if any lint error remains after your fix attempt, stop. Post the first 50 lines of error output (append `[truncated — N lines total]` if there is more). Do not proceed to step 6.
+- Resolve the lint command from package.json scripts first (`lint`), falling back to `.github/copilot-instructions.md > Commands`; if neither names one, note "No lint command detected" and continue.
+- **Self-fix loop (max 2 rounds):** run the command; on errors, fix them and re-run. Each round is REPORTED in your report's fix-loop log — a fix attempt is never silent. Warnings may remain only if the plan explicitly permits it.
+- **Hard block:** if lint errors remain after 2 fix rounds, stop. Post the first 50 lines of error output (append `[truncated — N lines total]` if there is more). Do not proceed to step 6.
 - → Checkpoint: mark `lint` as `"done"` on pass, `"failed"` on hard block (record verbatim error in `failure_output`).
 
 ## Step 6: type_check
-- Run the repo's typecheck command (from `copilot-instructions.md > Commands`). If the project has no type checker, note "No type checker detected" and continue.
-- Fix every type error. Do not suppress errors with `// @ts-ignore`, `// @ts-expect-error`, or any equivalent unless the plan explicitly authorizes it and explains why.
-- **Hard block:** if any type error remains, stop. Post the first 50 lines of output.
+- Resolve the typecheck command from package.json scripts first (`typecheck` / `type-check` / `types`), falling back to `copilot-instructions.md > Commands`. If neither names one, note "No type checker detected" and continue.
+- **Self-fix loop (max 2 rounds):** run, fix every type error, re-run. Each round is reported. Do not suppress errors with `// @ts-ignore`, `// @ts-expect-error`, or any equivalent unless the plan explicitly authorizes it and explains why.
+- **Hard block:** if type errors remain after 2 fix rounds, stop. Post the first 50 lines of output.
 - → Checkpoint: mark `type_check` as `"done"` on pass, `"failed"` on hard block.
 
 ## Step 7: unit_tests
-- Run the repo's full test suite (command from `copilot-instructions.md > Commands`), not just the new tests. Remember: many test runners do NOT type-check — step 6 is not optional.
-- **Hard block:** if any test fails, stop immediately. Post:
+- Resolve the test command from package.json scripts first (`test`, ignoring npm's placeholder), falling back to `copilot-instructions.md > Commands`. Run the repo's FULL test suite, not just the new tests. Remember: many test runners do NOT type-check — step 6 is not optional.
+- **Self-fix loop (max 2 rounds), with guardrails:** on failure, diagnose which side is wrong:
+  - Failure in code you just wrote → fix the CODE, re-run. Reported, never silent.
+  - Failure in a test you just wrote whose assertion mis-encodes the plan's acceptance criterion → fix the test to match the criterion, re-run, and report why.
+  - **Never** weaken, skip, or delete a test to make it pass, and never change a PRE-EXISTING test's expectations — if a pre-existing test fails and the plan did not authorize that behavior change, that is a hard block regardless of remaining fix rounds.
+- **Hard block:** if failures remain after 2 fix rounds (or a pre-existing test's expectations would have to change), stop immediately. Post:
   1. The exact test name(s) that failed.
   2. The first 50 lines of failure output.
-  3. Whether the failure is in new test code or pre-existing tests.
-  Do not attempt a silent fix and re-run without reporting.
+  3. Whether the failure is in new test code or pre-existing tests, and what each fix round attempted.
 - → Checkpoint: mark `unit_tests` as `"done"` on pass, `"failed"` on hard block.
 
 ## Step 8: explain_test_changes
@@ -184,9 +188,9 @@ YAML rail execution:
 - read_conventions: done
 - write_tests_first: done — <N tests written, all initially red>
 - write_code: done — <N files modified>
-- lint: pass
-- type_check: pass | skipped (<reason>) | blocked — <error summary>
-- unit_tests: pass — <N/N passing>
+- lint: pass | pass after <N> fix round(s) | skipped (no lint command detected)
+- type_check: pass | pass after <N> fix round(s) | skipped (<reason>) | blocked — <error summary>
+- unit_tests: pass — <N/N passing> | pass after <N> fix round(s) — <N/N passing>
 - explain_test_changes: <"No existing tests were modified." | list of modified tests with reasons>
 - complexity_check: pass | flagged — <per-file summary>
 - conventions_check: pass
@@ -194,6 +198,9 @@ YAML rail execution:
 
 Files changed:
 - <path>: <created | modified | deleted>
+
+Fix-loop log (if any self-fix rounds ran):
+- <step>: round <n> — <what failed, one line> → <what was fixed, one line> | "none"
 
 Scope expansions (if any):
 - <path>: <reason — approved by: inline | overrides.yaml> | "none"

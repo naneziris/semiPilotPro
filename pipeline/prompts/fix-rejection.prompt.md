@@ -23,7 +23,12 @@ Take a deep breath and work through this step by step.
 
 ---
 
-# STEP 1: CONFIRM FIXES WITH DEV
+# STEP 1: CONFIRM FIXES
+
+**Invocation mode determines who confirms:**
+
+- **Pipeline-invoked** (`/run-pipeline` stated `invoked_by: run-pipeline`): do NOT wait for Dev. The critic's logged Required fixes are the authorization; the orchestrator's retry budget bounds the loop. Post the FIX PLAN block below for the record, replace its last line with `Applying automatically (pipeline-invoked).`, and proceed directly to STEP 2.
+- **Direct invocation** (Dev ran `/fix-rejection` manually): confirm with Dev before touching any file, as below.
 
 Post this block before touching any file:
 
@@ -43,7 +48,7 @@ Files I will touch:
 Type **confirm** to apply these fixes, or describe any adjustments.
 ```
 
-Wait for Dev's explicit response. Do not proceed until Dev types **confirm** (case-insensitive) or provides adjusted instructions.
+**Direct invocation only:** wait for Dev's explicit response. Do not proceed until Dev types **confirm** (case-insensitive) or provides adjusted instructions. Pipeline-invoked runs skip this wait.
 
 ---
 
@@ -57,31 +62,32 @@ Apply only the fixes listed in the FIX PLAN — nothing else.
 - Do not fix unrelated lint or type issues in out-of-scope files.
 - Do not add anything the critic's fix list does not mention.
 
-If applying a fix would require touching a file outside the original `Files to Change` table in the plan, stop and report: "Fix requires modifying `<file>`, which is outside the original plan scope. Confirm this is acceptable before proceeding."
+If applying a fix would require touching a file outside the original `Files to Change` table in the plan, stop and report: "Fix requires modifying `<file>`, which is outside the original plan scope. Confirm this is acceptable before proceeding." This stop applies in BOTH invocation modes — scope is always a human decision; when pipeline-invoked, this surfaces as an escalation."
 
 ---
 
 # STEP 3: RE-RUN DOWNSTREAM VERIFICATION
 
-Run these steps in order. Hard-block on failure exactly as `/implement-plan` does.
+Run these steps in order. Resolve commands from package.json scripts first, falling back to `.github/copilot-instructions.md > Commands`. Self-fix loops and hard blocks work exactly as `/implement-plan` does: max 2 reported fix rounds per step, then block.
 
 ## lint
-- Run the linter on every file modified in Step 2.
-- Fix every lint error introduced by the fix. Do not fix pre-existing errors in out-of-scope files.
-- **Hard block:** if any lint error remains, stop and post the verbatim output.
+- Run the repo's lint command on every file modified in Step 2.
+- **Self-fix loop (max 2 rounds):** fix the errors introduced by the fix; re-run. Report each round. Do not fix pre-existing errors in out-of-scope files.
+- **Hard block:** if lint errors remain after 2 rounds, stop and post the verbatim output.
 
 ## type_check
-- Run `tsc --noEmit` (TS) or `mypy` (Python) on the modified files.
-- Fix every type error introduced by the fix. Do not suppress.
-- **Hard block:** if any type error remains, stop and post the verbatim output.
-- If no type checker is present, note "No type checker detected" and continue.
+- Run the repo's typecheck command on the modified files.
+- **Self-fix loop (max 2 rounds):** fix every type error introduced by the fix; re-run. Report each round. Do not suppress.
+- **Hard block:** if type errors remain after 2 rounds, stop and post the verbatim output.
+- If no type checker resolves, note "No type checker detected" and continue.
 
 ## unit_tests
-- Run the full test suite.
-- **Hard block:** if any test fails, stop immediately. Post:
+- Run the full test suite with the repo's test command.
+- **Self-fix loop (max 2 rounds), same guardrails as the rail:** fix the CODE, never weaken, skip, or delete a test; a pre-existing test whose expectations would have to change is an immediate hard block.
+- **Hard block:** if failures remain after 2 rounds, stop immediately. Post:
   1. The exact test name(s) that failed.
   2. The failure output verbatim.
-  3. Whether the failure is in new test code or pre-existing tests.
+  3. Whether the failure is in new test code or pre-existing tests, and what each fix round attempted.
 
 ## explain_test_changes
 - Check if any pre-existing test file was modified in Step 2.
@@ -116,9 +122,9 @@ Fixes applied:
 <numbered list matching the Required fixes from Step 1 — one line per fix, with the file and line changed>
 
 Downstream verification:
-- lint: pass | blocked — <error summary>
-- type_check: pass | skipped (<reason>) | blocked — <error summary>
-- unit_tests: pass — <N/N passing>
+- lint: pass | pass after <N> fix round(s) | blocked — <error summary>
+- type_check: pass | pass after <N> fix round(s) | skipped (<reason>) | blocked — <error summary>
+- unit_tests: pass — <N/N passing> | pass after <N> fix round(s) — <N/N passing>
 - explain_test_changes: <"No existing tests were modified." | list of modified tests with reasons>
 - complexity_check: pass | flagged — <per-file summary>
 - conventions_check: pass

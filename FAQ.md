@@ -13,9 +13,12 @@ want to do yourself:
 - **`/run-pipeline <idea>`** (VS Code chat) — the one-command entry. It
   runs the entire flow (refine → Gate 1 → plan → implement → Gate 2 →
   scribe), invoking each stage as a subagent and routing on their
-  `### HANDOFF:` blocks automatically. It pauses only where a human
-  belongs: tag confirmation, clarifying questions, and the two gates.
-  **If in doubt, start here.**
+  `### HANDOFF:` blocks automatically. Critic rejections loop back through
+  the fix mechanisms on their own (max 2 loops per gate, then it escalates
+  to you). It pauses only where a human belongs: tag confirmation,
+  clarifying questions, and your spec approval after Gate 1 — Gate 2
+  APPROVED flows straight to the scribe, and you review the diff at commit
+  time. **If in doubt, start here.**
 - **`/refine-requirements <idea>`, then follow the handoffs** — manual
   mode. Each stage ends with a `### HANDOFF:` block naming exactly what to
   invoke next (`@spec-critic`, `/create-implementation-plan`,

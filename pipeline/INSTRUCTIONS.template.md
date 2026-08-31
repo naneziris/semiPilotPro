@@ -27,7 +27,7 @@ grepping the codebase.
 | `@pattern-critic` | agent (Gate 2) | APPROVED/REJECTED verdict on the diff (incl. knowledge coverage) |
 | `/fix-rejection` | prompt | Applies Gate 2's required fixes, re-runs downstream rail steps |
 | `@scribe` | agent | Updates cards, manifest, ADRs, dependencies, changelog after approval |
-| `/run-pipeline` | prompt | Chains all of the above, pausing only at the gates |
+| `/run-pipeline` | prompt | Chains all of the above autonomously; loops rejections through the fix mechanisms; pauses once for your spec approval after Gate 1; escalates when a loop can't converge |
 | `/gate-triage` | prompt | Cheap structural pre-check before each critic |
 | `/create-mr-description`, `/explain-changes`, `/write-tests` | prompts | Optional helpers |
 | `/impact`, `/new-card`, `/sync-cards` | prompts | Knowledge-layer utilities outside the pipeline |
@@ -81,9 +81,15 @@ Reads the spec against the resolved cards, `docs/decisions.md` (ADRs), and
 `kb-resolve` itself and rejects specs whose card list doesn't match; a touched
 module with NO card is an automatic reject ("create the card first").
 
-**Your job (human sync gate #1):** read the verdict; on APPROVED, approve the
-spec and continue; on REJECTED, the required fix goes back through
-`/refine-requirements`.
+**Your job (the intent check):** the critic runs automatically — you don't
+prompt it, and REJECTED loops automatically back through `/refine-requirements`
+(up to 2 loops; you're pulled in only if the loop can't converge). But when it
+says APPROVED, the pipeline pauses ONCE for you: read the In/Out of Scope and
+acceptance criteria, confirm this is actually what you meant, and type
+**approve**. The critic can verify the spec is feasible and well-formed; it
+cannot verify it matches your intent — and this is the last point where a
+misread idea costs one file edit instead of a full cycle. After your approval,
+everything through to the scribe runs without pausing.
 
 ### Step 3 — Plan: `/create-implementation-plan`
 
@@ -119,23 +125,30 @@ tests-on-disk, rail completeness, **knowledge coverage** (`kb-guard`: every
 card owning changed code must be covered by the plan's Knowledge Updates
 section), dead code, lint suppression, test-change justification.
 
-**Your job (human sync gate #2):** read the verdict; APPROVED → approve the
-diff; REJECTED → `/fix-rejection` applies the required fixes and re-runs the
-downstream rail steps, then resubmits to Gate 2.
+**Your job:** normally nothing. APPROVED flows straight to the scribe.
+REJECTED loops automatically — `/fix-rejection` applies the required fixes,
+re-runs the downstream rail steps, and resubmits to Gate 2, up to 2 loops.
+You are pulled in only on **escalation** (budget exhausted, repeated identical
+rejection, or a fix that hard-blocks on lint/type/tests). Complexity flags the
+critic attaches surface in the final PIPELINE COMPLETE block for you to review
+before committing.
 
 ### Step 6 — Document: `@scribe`
 
-After your Gate 2 approval, the scribe executes the plan's Knowledge Updates:
+Immediately after Gate 2 approves (no pause), the scribe executes the plan's Knowledge Updates:
 surgical card edits, instructions-file tweaks, ADR/dependency entries, one
 changelog line — then runs `kb:validate`, regenerates `manifest.json`
 (`kb:index`), and verifies coverage with `kb:guard`. It reports any gap it
 noticed but was not authorized to fix.
 
 *(Optional between 5 and 6: `/create-mr-description` — off by default, enable
-via `pipeline-overrides.yaml` or by typing `mr` after approval.)*
+via `pipeline-overrides.yaml` or by typing `mr` after the pipeline completes.)*
 
 ### Step 7 — Commit (you)
 
+This is your real review point in autonomous mode: read the PIPELINE COMPLETE
+block (Gate 2 flags, scribe gaps, rejection history in
+`.github/rejection-log.md`), review the diff, then
 `git add -A && git commit` — the `.githooks/pre-commit` hook re-runs
 `kb:validate` + `kb:check` and prints the guard nag. If the pipeline did its
 job, this passes silently. Push; CI runs the same checks plus `kb:drift`.

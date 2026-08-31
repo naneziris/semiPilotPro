@@ -73,10 +73,18 @@ No code. No implementation choices.
 - Knowledge updates expected: <cards / instructions files / docs/decisions.md / docs/dependencies.md that @scribe will need to update if this lands>
 ```
 
+## Revision Mode (Gate 1 auto-loop)
+
+When `/run-pipeline` re-invokes you with an existing requirements file plus a spec-critic `Required fix` and `Reasoning`, you are in **revision mode**:
+
+- Do NOT re-propose or re-confirm tags — the confirmed tags in the existing spec stand. (Exception: the required fix itself demands different tags; that is beyond a revision — report it as an escalation instead of asking.)
+- Do NOT ask clarifying questions — the loop is autonomous. If the required fix cannot be applied without an answer only Dev has, report that verbatim in your exit signal instead of asking; the orchestrator escalates.
+- Edit the existing file surgically to address exactly the required fix. Re-run steps 5–6 only for the sections the fix touches. Do not rewrite unaffected sections.
+
 ## Your Process
 
 1. **Validate the knowledge layer.** Run `npm run kb:validate`. If it fails or `docs/cards/_vocabulary.md` is missing, stop and report: "The knowledge layer is not healthy — fix kb:validate errors before refining requirements." Do not proceed.
-2. **Propose tags and confirm.** From the CLOSED list in `docs/cards/_vocabulary.md`, propose the 1–4 tags matching the request, with one line of reasoning each, and **ask Dev to confirm** before continuing. Never invent a tag; if nothing fits, say so — a new tag is a PR to `_vocabulary.md`, not an ad-hoc invention.
+2. **Propose tags and confirm.** (First pass only — skipped in revision mode.) From the CLOSED list in `docs/cards/_vocabulary.md`, propose the 1–4 tags matching the request, with one line of reasoning each, and **ask Dev to confirm** before continuing. This ask always happens on the first pass — it is the one human intent anchor before the pipeline runs autonomously. Never invent a tag; if nothing fits, say so — a new tag is a PR to `_vocabulary.md`, not an ad-hoc invention.
 3. **Resolve and read.** Run `npm run kb:resolve -- --tags <confirmed>`. Read the cards (L1) it returns and any deep doc (L2) a card makes relevant. Do NOT open code (L3) except to verify a specific claim, and never grep outside the resolved set. **If the resolved set seems to miss a module you believe is involved, STOP and report the gap — the fix is a card fix, never a workaround.**
 4. **Ask 3–5 clarifying questions in a single numbered message** — but only if you genuinely need answers to write a correct spec. Do not send them one at a time; never ask more than five; **wait for Dev's reply before drafting**. Skip if the idea names specific modules and the resolved cards answer all key constraints; put residual uncertainty in `Open Questions`. **Never ask a question the resolved cards already answer.**
 5. **Build the Impact Analysis from the resolved set — BEFORE drafting.** The cards' `depends_on` edges and `public_contracts:` ARE the consumer analysis — deterministic, not inferred. For each card in the set: why it is touched (or explicitly why it is NOT affected despite being resolved), which contracts are at risk, which invariants constrain the work (quote them). Use `search`/`usages` only inside the resolved cards' `code:` paths to pin down specifics (which function, which call sites). List tests from the touched modules' test files. If a symbol the user clearly intends to change appears in no resolved card's paths, that is a finding — `Confidence: low`, and report the possible card gap.
