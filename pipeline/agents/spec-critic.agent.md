@@ -49,7 +49,7 @@ Work through these in order. Stop at the first REJECTED finding. If a check has 
    - Concurrent modification?
    - Failure modes for each external dependency?
    If a critical edge case is unaddressed → REJECT.
-5. **Testability.** Is every acceptance criterion observable and testable? Unobservable criteria → REJECT.
+5. **Testability.** Is every acceptance criterion observable and testable, and does each carry a `[check: <ref>]` tag naming a test or a global check (`lint`, `typecheck`, `build`)? Unobservable or untagged criteria → REJECT. Required fix: name the check.
 6. **Circularity.** Does the spec require itself to work? If yes → REJECT.
 7. **Scope coherence.** Is `Out of Scope` internally consistent with `In Scope`? If it excludes something the acceptance criteria require → REJECT.
 8. **Impact analysis coverage (card-based).** Verify:

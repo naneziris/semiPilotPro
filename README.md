@@ -5,7 +5,10 @@ layer** (module cards + closed vocabulary + zero-dependency scripts that
 retrieve, validate, and drift-check it), the **enforcement** that keeps it
 true (pre-commit hook, CI workflow, Copilot instruction files), and
 optionally the **SemiPilot pipeline** (requirements → two self-running critic gates →
-plan → implement → scribe) rewired to run on that layer.
+plan → implement → scribe) rewired to run on that layer, and on top of that the
+**PilotInLoop** — the same agents driven by a Python orchestrator that plans,
+critiques, writes locked tests and implements a feature unattended, with the
+human only at the front (refine + answer questions) and the back (morning review).
 
 Extracted from a real production installation and generalized for any repo.
 Read in this order: `INSTALL.md` (how to adopt), `USAGE.md` (the day-to-day
@@ -19,6 +22,7 @@ the phased, size-proof rollout plan.
 ```bash
 ./install.sh /path/to/your-repo yourapp                  # knowledge layer only
 ./install.sh /path/to/your-repo yourapp --with-pipeline  # + SemiPilot pipeline
+./install.sh /path/to/your-repo yourapp --with-pilotinloop # + pipeline + PilotInLoop
 cd /path/to/your-repo
 git config core.hooksPath .githooks
 # then, in VS Code Copilot chat:
@@ -51,6 +55,15 @@ pipeline/                      # optional: SemiPilot Pro patched for the knowled
   skills/code-analyzer/        # complexity checks for the rail + Gate 2
   semipilot-core.md            # the machine contract
   INSTRUCTIONS.template.md     # the human manual (installed as INSTRUCTIONS.md)
+  agents/pilotinloop-*.agent.md  # the 3 loop-only agents: planner (questions / plan.json), spec-critic, plan-critic
+  PILOTINLOOP.template.md      # the runbook (installed as PILOTINLOOP.md): setup, evening, night, morning, troubleshooting
+  pilotinloop/                   # optional: autonomous loop (installed as .github/pilotinloop/ + Makefile)
+    orchestrator.py, runner.py # the loop + Copilot CLI runner (fresh process per task, guardrails, breaker)
+    config.yaml                # checks, budgets, deny-list, failure patterns — everything tunable
+    prompts/, tests/, Makefile # role prompts; 50-test suite with a fake Copilot CLI
+docs/
+  pilotinloop-handoff-v2.md      # design of record for PilotInLoop
+  copilot-cli-findings.md      # what the Copilot CLI verifiably supports headless (and what is unverified)
 bootstrap/
   bootstrap-knowledge-layer.prompt.md  # /bootstrap-knowledge-layer — AI-guided adoption with human gates
   cartographer.agent.md                # parallel card drafter for large repos
@@ -68,6 +81,10 @@ bootstrap/
   into `package.json` when present, otherwise adjust to direct `node` calls.
 - Pipeline layer targets **GitHub Copilot in VS Code** (`.agent.md`,
   `.prompt.md`, `applyTo` instruction files).
+- PilotInLoop needs **Python ≥ 3.9** with `pyyaml` (+ `jsonschema` ≥ 4,
+  `pytest` for its own tests), `make`, and the **Copilot CLI** on PATH,
+  logged in. Its error classification is regex on CLI output and must be
+  tuned after a first supervised dry run (`docs/copilot-cli-findings.md`).
 
 ## The one rule that keeps it alive
 

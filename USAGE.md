@@ -92,6 +92,40 @@ Escape hatches: start mid-pipeline or bypass a specific critic check by
 declaring it in `.github/pipeline-overrides.yaml` — every bypass is logged
 to `.github/rejection-log.md`, never silent.
 
+## Flow C — PilotInLoop (installed with `--with-pilotinloop`)
+
+Same agents, different driver: a Python orchestrator (`.github/pilotinloop/`)
+owns the loop and runs every check; the agents never decide they are done.
+Human at the front and the back only.
+
+1. **Evening (~10–15 min, interactive).** `@refiner` as usual → every
+   acceptance criterion carries a `[check: <ref>]` tag (test name or
+   `lint`/`typecheck`/`build`). `make preflight FEATURE=<slug>` validates
+   the tags, refuses a dirty tree, checks Copilot CLI auth, and runs the
+   planner in **questions-only mode** → `.github/requirements/open-questions.md`.
+   Answer inline, merge the answers into `requirements.md`, commit.
+2. **`nohup make pilotinloop FEATURE=<slug> > pilotinloop.out 2>&1 &`** — on a
+   fresh `pilotinloop/<slug>-<date>` branch: plan (`plan.json`, kept outside
+   the repo) → `@pilotinloop-spec-critic` + `@pilotinloop-plan-critic` (JSON
+   verdicts; two rejected rounds halt the run) → locked acceptance tests,
+   one file per task → one fresh Copilot CLI process per task attempt,
+   checks after every call, retries keep the failed diff, per-task commits
+   → final full-suite run → morning report. Budgets, scope, diff caps,
+   test lock, deny-list, infra backoff and circuit breaker are all in
+   `config.yaml`.
+3. **Morning.** `reports/pilotinloop-<date>-<slug>.md` — read the
+   **assumptions** (`.github/requirements/decisions.md`) first, then blocked
+   tasks, then the diff. Wrong assumption → `make rollback TASK=<id>`;
+   `make resume` continues from the last good checkpoint. Then `@scribe`
+   and the normal commit review — the loop never touches the knowledge
+   layer and never pushes.
+
+Full runbook with setup, troubleshooting and what the loop never does:
+`PILOTINLOOP.md` (kit: `pipeline/PILOTINLOOP.template.md`).
+Use it for well-specified features that follow existing patterns in areas
+with solid tests. Ambiguous, novel or cross-cutting work stays in Flow B.
+Design of record: `docs/pilotinloop-handoff-v2.md`.
+
 ## Standalone helpers (either flow)
 
 `/write-tests` (tests for existing code, convention-enforced),

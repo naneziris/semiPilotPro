@@ -3,11 +3,13 @@
 # SemiPilot pipeline) into a target repository.
 #
 # Usage:
-#   ./install.sh <target-repo-path> <system-name> [--with-pipeline]
+#   ./install.sh <target-repo-path> <system-name> [--with-pipeline] [--with-pilotinloop]
 #
 #   <system-name>  lowercase-kebab prefix for card ids (e.g. "myapp" →
 #                  cards get ids like myapp.billing)
 #   --with-pipeline  also install the SemiPilot agents/prompts/skill
+#   --with-pilotinloop also install the pilotinloop autonomous loop
+#                    (.github/pilotinloop/ + Makefile targets; implies --with-pipeline)
 #
 # The installer NEVER overwrites an existing file — it skips and reports, so
 # it is safe to re-run. After installing, run the bootstrap (see the printed
@@ -19,10 +21,17 @@ KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:-}"
 SYSTEM="${2:-}"
 WITH_PIPELINE=false
-[ "${3:-}" = "--with-pipeline" ] && WITH_PIPELINE=true
+WITH_PILOTINLOOP=false
+for flag in "${@:3}"; do
+  case "$flag" in
+    --with-pipeline) WITH_PIPELINE=true ;;
+    --with-pilotinloop) WITH_PILOTINLOOP=true; WITH_PIPELINE=true ;;
+    *) echo "error: unknown flag '$flag'" >&2; exit 1 ;;
+  esac
+done
 
 if [ -z "$TARGET" ] || [ -z "$SYSTEM" ]; then
-  echo "usage: ./install.sh <target-repo-path> <system-name> [--with-pipeline]" >&2
+  echo "usage: ./install.sh <target-repo-path> <system-name> [--with-pipeline] [--with-pilotinloop]" >&2
   exit 1
 fi
 if [ ! -d "$TARGET" ]; then
@@ -120,6 +129,7 @@ fi
 if $WITH_PIPELINE; then
   echo "-- SemiPilot pipeline (agents, prompts, skill, contract, manual)"
   for f in "$KIT_DIR"/pipeline/agents/*.md; do
+    case "$(basename "$f")" in pilotinloop-*) continue ;; esac   # installed with --with-pilotinloop
     copy_file "$f" "$TARGET/.github/agents/$(basename "$f")" substitute
   done
   for f in "$KIT_DIR"/pipeline/prompts/*.md; do
@@ -130,6 +140,44 @@ if $WITH_PIPELINE; then
   chmod +x "$TARGET/.github/skills/code-analyzer/run.py" 2>/dev/null || true
   copy_file "$KIT_DIR/pipeline/semipilot-core.md" "$TARGET/semipilot-core.md" substitute
   copy_file "$KIT_DIR/pipeline/INSTRUCTIONS.template.md" "$TARGET/INSTRUCTIONS.md" substitute
+fi
+
+if $WITH_PILOTINLOOP; then
+  echo "-- PilotInLoop autonomous loop (agents, orchestrator, config, prompts, tests, Makefile targets, runbook)"
+  for f in "$KIT_DIR"/pipeline/agents/pilotinloop-*.md; do
+    copy_file "$f" "$TARGET/.github/agents/$(basename "$f")" substitute
+  done
+  copy_file "$KIT_DIR/pipeline/PILOTINLOOP.template.md" "$TARGET/PILOTINLOOP.md" substitute
+  for f in config.yaml orchestrator.py runner.py plan.schema.json README.md; do
+    copy_file "$KIT_DIR/pipeline/pilotinloop/$f" "$TARGET/.github/pilotinloop/$f"
+  done
+  for f in "$KIT_DIR"/pipeline/pilotinloop/prompts/*.md; do
+    copy_file "$f" "$TARGET/.github/pilotinloop/prompts/$(basename "$f")"
+  done
+  for f in "$KIT_DIR"/pipeline/pilotinloop/tests/*.py; do
+    copy_file "$f" "$TARGET/.github/pilotinloop/tests/$(basename "$f")"
+  done
+  chmod +x "$TARGET/.github/pilotinloop/orchestrator.py" 2>/dev/null || true
+  copy_file "$KIT_DIR/docs/pilotinloop-handoff-v2.md" "$TARGET/docs/pilotinloop-handoff-v2.md"
+  copy_file "$KIT_DIR/docs/copilot-cli-findings.md" "$TARGET/docs/copilot-cli-findings.md"
+  if [ -e "$TARGET/Makefile" ]; then
+    if grep -q "pilotinloop/orchestrator.py" "$TARGET/Makefile"; then
+      echo "  skip (targets already present): Makefile"
+      skipped=$((skipped + 1))
+    else
+      copy_file "$KIT_DIR/pipeline/pilotinloop/Makefile" "$TARGET/Makefile.pilotinloop"
+      echo "  NOTE: Makefile exists — add 'include Makefile.pilotinloop' to it (or merge the targets)"
+    fi
+  else
+    copy_file "$KIT_DIR/pipeline/pilotinloop/Makefile" "$TARGET/Makefile"
+  fi
+  if [ -d "$TARGET/.git" ]; then
+    if ! grep -qs "^.github/pilotinloop/runs/" "$TARGET/.git/info/exclude"; then
+      mkdir -p "$TARGET/.git/info"
+      echo ".github/pilotinloop/runs/" >> "$TARGET/.git/info/exclude"
+      echo "  excluded:      .github/pilotinloop/runs/ (in .git/info/exclude)"
+    fi
+  fi
 fi
 
 echo "-- package.json kb scripts"
@@ -173,3 +221,12 @@ NEXT STEPS (full guide: INSTALL.md in the kit):
     npm run kb:validate && npm run kb:index && npm run kb:drift are green.
  4. Commit. The pre-commit hook and CI take it from there.
 EOF
+if $WITH_PILOTINLOOP; then
+  cat <<EOF
+ 5. PilotInLoop: read PILOTINLOOP.md. pip install pyyaml jsonschema pytest, edit
+    .github/pilotinloop/config.yaml — set 'checks' to your lint/typecheck/test/
+    build commands (keep {task_tests}), 'tests.patterns' to your test layout.
+    Verify: make test-pilotinloop. Do ONE supervised dry run on a small
+    feature before trusting it unattended.
+EOF
+fi

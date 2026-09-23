@@ -13,14 +13,20 @@ misinformation.
 2. **Knowledge layer only, or + pipeline?** The layer alone already makes
    Copilot materially better. Add `--with-pipeline` when you want the full
    refine → gates → implement → scribe process.
-3. **Language check.** TS/JS repos get the full suite. Other stacks: the
+3. **PilotInLoop?** Add `--with-pilotinloop` only once the pipeline works
+   for you by hand and the repo has a real test suite: the loop's definition
+   of done is "all configured checks pass", so weak checks mean confident
+   wrong code at 6 am. See `docs/pilotinloop-handoff-v2.md` §12 for when it
+   fits (well-specified features following existing patterns) and when it
+   doesn't (ambiguous, novel, cross-cutting).
+4. **Language check.** TS/JS repos get the full suite. Other stacks: the
    drift check needs an import extractor for your language (or disable that
    one CI job) — everything else is language-agnostic markdown + JSON.
 
 ## Phase 1 — Mechanical install
 
 ```bash
-./install.sh /path/to/repo <system-name> [--with-pipeline]
+./install.sh /path/to/repo <system-name> [--with-pipeline] [--with-pilotinloop]
 cd /path/to/repo
 git config core.hooksPath .githooks        # once per clone, every teammate
 ```
@@ -32,7 +38,11 @@ templates into their real locations (`.github/copilot-instructions.md`,
 `docs/cards/_vocabulary.md`, `docs/README.md`, `docs/decisions.md`,
 `docs/dependencies.md`, `docs/CHANGELOG.md`). With `--with-pipeline`, also
 the 6 agents, 9 pipeline prompts, code-analyzer skill, `semipilot-core.md`,
-and `INSTRUCTIONS.md`. It never overwrites: existing files are skipped and
+and `INSTRUCTIONS.md`. With `--with-pilotinloop` (implies the pipeline), also
+`.github/pilotinloop/` (orchestrator, runner, config, prompts, tests), the
+`Makefile` targets (as `Makefile.pilotinloop` if you already have a Makefile),
+`docs/pilotinloop-handoff-v2.md` + `docs/copilot-cli-findings.md`, and a
+`.git/info/exclude` entry for the per-run logs. It never overwrites: existing files are skipped and
 reported (it prints merge notes for `AGENTS.md` / `.vscode/settings.json`).
 
 Post-install checks:
@@ -74,6 +84,12 @@ only, and card updates ride in the same PR as code changes.
 - With the pipeline: `INSTRUCTIONS.md` is the manual for the full
   refine → gates → implement → scribe flow; `semipilot-core.md` is the
   contract. Trivial edits skip the pipeline — the hook still guards them.
+- With PilotInLoop: `PILOTINLOOP.md` is the runbook
+  (`make preflight` → answer questions → `nohup make pilotinloop` → morning
+  report). Before the first unattended run: set `checks` and
+  `tests.patterns` in `.github/pilotinloop/config.yaml`, run
+  `make test-pilotinloop`, then one **supervised** run on a small feature and
+  tune `failure_patterns` from any call the logs classify as `unknown`.
 - CI: `validate` + manifest check block from day one; `drift` is
   warning-only (`continue-on-error`) — remove that line once it has been
   quiet for a while; `guard` never blocks, it nags in the step summary.

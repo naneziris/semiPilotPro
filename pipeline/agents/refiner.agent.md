@@ -59,7 +59,7 @@ No code. No implementation choices.
 **Confidence:** <high | medium | low>. If `low`, list the specific unknowns in `Open Questions`.
 
 ## Acceptance Criteria
-1. <testable statement, phrased as "Given … When … Then …" or an equivalent observable outcome>
+1. <testable statement, phrased as "Given … When … Then …" or an equivalent observable outcome> [check: <ref>]
 
 ## Assumptions
 - <any assumption the spec depends on — flag these clearly>
@@ -89,7 +89,7 @@ When `/run-pipeline` re-invokes you with an existing requirements file plus a sp
 4. **Ask 3–5 clarifying questions in a single numbered message** — but only if you genuinely need answers to write a correct spec. Do not send them one at a time; never ask more than five; **wait for Dev's reply before drafting**. Skip if the idea names specific modules and the resolved cards answer all key constraints; put residual uncertainty in `Open Questions`. **Never ask a question the resolved cards already answer.**
 5. **Build the Impact Analysis from the resolved set — BEFORE drafting.** The cards' `depends_on` edges and `public_contracts:` ARE the consumer analysis — deterministic, not inferred. For each card in the set: why it is touched (or explicitly why it is NOT affected despite being resolved), which contracts are at risk, which invariants constrain the work (quote them). Use `search`/`usages` only inside the resolved cards' `code:` paths to pin down specifics (which function, which call sites). List tests from the touched modules' test files. If a symbol the user clearly intends to change appears in no resolved card's paths, that is a finding — `Confidence: low`, and report the possible card gap.
 6. **Decomposition check.** Apply `semipilot-core.md > Decomposition Policy`. The "architectural boundaries" trigger is now measurable: the resolved impact set spans more than 2 cards with non-trivial changes. If any trigger holds, decompose (index + sub-files, each with its own scoped Impact Analysis).
-7. **Draft the file(s).** Short, concrete, testable acceptance criteria. No implementation hints. Fill `Knowledge References` — downstream stages re-resolve from your tags instead of re-inferring.
+7. **Draft the file(s).** Short, concrete, testable acceptance criteria, each tagged `[check: <ref>]` (see Hard Constraints). No implementation hints. Fill `Knowledge References` — downstream stages re-resolve from your tags instead of re-inferring.
 8. **Flag gaps.** Unknown contract or constraint → `Open Questions` with a default answer.
 9. **Stop.** Do not invoke the planner. Return the file path(s).
 
@@ -100,6 +100,11 @@ When `/run-pipeline` re-invokes you with an existing requirements file plus a sp
 - **No implementation choices.** That is the planner's job.
 - **Retrieval only via kb-resolve.** No repo-wide grep, no reading files outside the resolved set. Gaps in the resolved set are card bugs — report them.
 - **Acceptance criteria must be observable.** "Code is clean" is not a criterion. "User sees an error message when input is empty" is.
+- **Every acceptance criterion ends with a `[check: <ref>]` tag** naming how a machine verifies it: a test name or
+  unique test-name substring (`[check: test_empty_input_shows_error]`) or a global check (`[check: lint]`,
+  `[check: typecheck]`, `[check: build]`). Untagged criteria are rejected by PilotInLoop preflight and are a
+  smell in the manual pipeline too — if you cannot name the check, the criterion is not observable yet. Test refs
+  are contracts: the planner may only reference tagged refs and the test-writer names its tests after them.
 - **If the user idea is ambiguous after five clarifying questions**, write the spec against your best interpretation and put the remaining ambiguity in `Open Questions`. Do not stall indefinitely.
 
 ## Exit Signal

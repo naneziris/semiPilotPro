@@ -35,6 +35,7 @@ Copilot operates as a **senior engineering collaborator**, not a tool or assista
 You can drive the pipeline in two ways:
 
 - **Manual** — invoke each step yourself in order. Gives you full control between steps.
+- **PilotInLoop** (optional, `.github/pilotinloop/`) — `make preflight` then `make pilotinloop`. A Python orchestrator drives the same agents unattended on a dedicated branch: plan → `@pilotinloop-spec-critic` + `@pilotinloop-plan-critic` (JSON verdicts) → locked tests → one Copilot CLI process per task → checks → report. Human only before (refine, answer the planner's questions) and after (morning review, `rollback`/`resume`, scribe, commit). Design: `docs/pilotinloop-handoff-v2.md`. Requires every acceptance criterion to carry a `[check: <ref>]` tag.
 - **Auto** — run `/run-pipeline` once. It chains all steps automatically, including the critics and the scribe — no step waits to be prompted. Critic rejections loop automatically through the fix mechanisms (refiner for Gate 1, `/fix-rejection` for Gate 2), bounded by a retry budget (default 2 per gate). The human has exactly ONE mid-run approval: after `@spec-critic` returns APPROVED, Dev confirms the spec before planning — the critics verify feasibility and conventions, but only Dev can verify intent, and this is the last point where a misread idea is cheap to fix. Everything downstream (plan → implement → Gate 2 → scribe) runs without pausing. Dev is otherwise involved at the start (idea + tag confirmation), on **escalation** (retry budget exhausted, non-converging rejections, hard blocks, scope expansion), and at the final commit review. Other modes via `entry_point.pauses` in `pipeline-overrides.yaml`: `at-gates` (legacy — approve after both gates, ask on every rejection), `after-each-step`, `none` (fully autonomous, no spec approval either).
 
 ```
@@ -244,6 +245,8 @@ verifies at Gate 2 that the PLAN covers every card `kb-guard` flags; the
 |---|---|---|
 | `.github/rejection-log.md` | Critics (`@spec-critic`, `@pattern-critic`) | Append-only log of every REJECTED verdict. Written by the critic that issued the rejection. `@scribe` reads it when writing `docs/CHANGELOG.md` to summarize rejection patterns across a release. |
 | `.github/implementation-progress.json` | `/implement-plan` | Checkpoint file tracking per-step status for the current implementation run. Enables resume after a blocked step. |
+| `.github/requirements/open-questions.md`, `.github/requirements/decisions.md` | PilotInLoop (`@pilotinloop-planner` questions-only mode; implementer/test-writer assumptions log) | Pre-run questions the human answers and merges into `requirements.md`; the run's logged assumptions (`D-<n>` entries, §7 of the handoff) — section 1 of the morning report. Distinct from `docs/decisions.md` (ADRs). |
+| `reports/pilotinloop-<date>-<feature>.md`, `.github/pilotinloop/runs/` | PilotInLoop orchestrator | Morning report; per-call prompt/stdout/stderr logs (untracked). The orchestrator also reuses `implementation-progress.json` (its own schema, run-scoped) and appends critic rejections to `rejection-log.md`. |
 | `.github/pipeline-overrides.yaml` | Dev (read by both critics and `/run-pipeline`) | Declared exceptions and partial-entry-point configuration for the current cycle. Replaces the pattern of commenting out critic checks. Every override is logged in `rejection-log.md` as an `OVERRIDDEN` entry so the bypass is recorded, not hidden. Deleted by Dev after the cycle (or set `expires_after_cycles: 1`). |
 
 **`.github/rejection-log.md` entry schema** (entries separated by `---`):
@@ -369,7 +372,7 @@ The index schema:
 
 ---
 
-## Agent Inventory (6 total)
+## Agent Inventory (6 + 3 PilotInLoop)
 
 | Agent | Role | Model |
 |---|---|---|
@@ -379,6 +382,8 @@ The index schema:
 | `@pattern-critic` | Post-implementation standards gate (+ knowledge coverage) | Claude Opus 4.8 |
 | `@implementer` | YAML rail executor — runs in isolated context window | Claude Sonnet 4.6 |
 | `@scribe` | Knowledge layer + docs updater | Claude Sonnet 4.6 |
+
+PilotInLoop adds three agents that only the orchestrator invokes (never `/run-pipeline`): `@pilotinloop-planner` (questions-only mode, then `plan.json` to stdout — Sonnet 4.6), `@pilotinloop-spec-critic` (plan vs. approved requirements, cards, ADRs — Sonnet 4.6), `@pilotinloop-plan-critic` (sizing, ownership, conventions, invariants, contracts — Opus 4.8). They keep the manual agents' knowledge-layer discipline but emit JSON only, ask nothing, and honor no overrides.
 
 **`@pattern-critic` runs on Opus 4.8** because it is the last line of defense before code reaches a PR — a false APPROVED is a code quality failure. All other agents run on Sonnet 4.6.
 

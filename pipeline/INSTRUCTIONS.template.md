@@ -9,6 +9,8 @@ This repo runs two subsystems that work as one:
 2. **The SemiPilot pipeline** — the development process: requirements → plan →
    implementation, guarded by two critic gates, executed by specialized Copilot
    agents. Machine contract: `semipilot-core.md`.
+   Optional: **PilotInLoop** runs the middle of that process unattended for
+   well-specified features — runbook: `PILOTINLOOP.md` (if installed).
 
 The knowledge layer is *what the agents know*; the pipeline is *how they work*.
 The pipeline's every stage retrieves through the knowledge layer — never by
