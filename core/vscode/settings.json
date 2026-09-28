@@ -1,7 +1,0 @@
-{
-  "chat.useAgentsMdFile": true,
-  "chat.promptFiles": true,
-  "chat.agentSkillsLocations": {
-    ".github/skills/**": true
-  }
-}

@@ -153,13 +153,15 @@ pytest -q                 # 65 tests against a fake Copilot CLI (outages, quota,
 ## Repository layout
 
 ```
-src/semipilot/        the CLI and the PilotInLoop orchestrator (this README)
-tests/                its test suite (fake Copilot CLI)
-GETTING-STARTED.md    knowledge layer install + the per-feature flow, on one page
-pipeline/, core/, bootstrap/, templates/, install.sh
-                      the original semiPilotPro kit (manual pipeline + knowledge layer + PilotInLoop v2);
-                      still installable with ./install.sh — see docs/KIT-README.md, INSTALL.md, USAGE.md
+src/semipilot/                       the CLI and the PilotInLoop orchestrator
+tests/                               its test suite (fake Copilot CLI)
+GETTING-STARTED.md                   knowledge layer install + the per-feature flow, on one page
+docs/pilotinloop-handoff-v2.md       design of record for the loop (why it is built the way it is)
+docs/copilot-cli-findings.md         what the Copilot CLI verifiably supports headless, and what is still unverified
 ```
+
+The knowledge layer lives in its own repository (`semipilot-knowledge-layer`); the step-by-step manual pipeline of
+earlier versions is on the `v3` branch.
 
 Install from this repository until it is on PyPI:
 
