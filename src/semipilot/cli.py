@@ -2,7 +2,7 @@
 
     semipilot init                 make this repo ready (config, /refine-requirements and /spec-critic, agents)
     semipilot doctor               check Copilot CLI, git, config and checks
-    semipilot preflight <feature>  the evening step: checks + the planner's questions, without starting
+    semipilot preflight <feature>  checks + the planner's questions, without starting the run
     semipilot run <feature>        PilotInLoop: run the loop for approved requirements (asks its questions first)
     semipilot status               where every feature stands
     semipilot review [feature]     print the report, assumptions first
@@ -55,7 +55,7 @@ def cmd_init(a) -> int:
     say("  1. Open .semipilot/config.yaml and confirm the `checks` commands are right for this repo.")
     say("  2. Fill in .github/copilot-instructions.md (one page: commands, conventions, architecture).")
     say("  3. In VS Code Copilot chat:  /refine-requirements <your idea>   then   /spec-critic   → reply `approve`")
-    say("  4. In a terminal:            semipilot run <feature>        (or `semipilot preflight` in the evening, `run` at night)")
+    say("  4. In a terminal:            semipilot run <feature>        (or `semipilot preflight` first, `run` later)")
     say("Run `semipilot doctor` any time to check the setup.")
     return 0
 
@@ -250,7 +250,7 @@ def main(argv=None) -> int:
     p.add_argument("--offline", action="store_true", help="skip the Copilot CLI call")
     p.set_defaults(fn=cmd_doctor)
 
-    p = sub.add_parser("preflight", help="evening step: checks + the planner's questions, without starting the run")
+    p = sub.add_parser("preflight", help="checks + the planner's questions, without starting the run")
     p.add_argument("feature")
     p.add_argument("--no-questions", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_run, preflight_only=True)

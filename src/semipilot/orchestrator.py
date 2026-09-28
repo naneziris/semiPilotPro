@@ -9,9 +9,9 @@ Layout inside a repo (see config.Layout):
                                                       /spec-critic (frontmatter status: approved) — the human gate
     .semipilot/features/<slug>/open-questions.md      planner's questions, answered inline by the human
     .semipilot/features/<slug>/implementation-plan.md the accepted plan, rendered for humans and for @scribe
-    .semipilot/features/<slug>/decisions.md           assumptions the loop made (read these first in the morning)
+    .semipilot/features/<slug>/decisions.md           assumptions the loop made (read these first)
     .semipilot/features/<slug>/rejection-log.md       critic rejections
-    .semipilot/features/<slug>/report.md              the morning report
+    .semipilot/features/<slug>/report.md              the report
     .semipilot/features/<slug>/implementation-progress.json   checkpoint (resume / rollback)
     .semipilot/runs/<run_id>/                         per-call logs (untracked)
 The manual pipeline's single `.github/requirements/` folder is used as-is when it exists (legacy layout).
@@ -636,7 +636,7 @@ class Loop:
     # ------------------------------------------------------------------ run
     def run(self, skip_questions: bool = False, preflight_only: bool = False) -> str:
         """Full run. Raises NeedsAnswers when the human has questions to answer first.
-        `preflight_only` stops after the checks and the questions (the evening step)."""
+        `preflight_only` stops after the checks and the questions (step 3 of the flow)."""
         self.ensure_gitignore()
         self.check_config()
         crit = self.check_spec()

@@ -1,8 +1,7 @@
 # semipilot
 
 The semiPilot pipeline as one installable tool: refine requirements, pass Gate 1, then let **PilotInLoop** plan,
-write the tests first, implement task by task on GitHub Copilot CLI, and leave you a report and a branch to review
-in the morning.
+write the tests first, implement task by task on GitHub Copilot CLI, and leave you a report and a branch to review.
 
 You stay at the two places where judgment matters — the requirements and their approval at the front, the review at
 the back. Everything in between is a loop that cannot push, cannot weaken a test, cannot wander outside its task,
@@ -41,9 +40,9 @@ everything below uses it — see *With the knowledge layer*.
 |---|---|---|
 | `/refine-requirements export orders as CSV` | Copilot chat | `@refiner`: confirms tags (knowledge layer) or explores the code, asks at most five questions, writes `requirements.md` — problem, scope, impact analysis, acceptance criteria each tagged with the check that proves it (`[check: test_csv_has_header]`), assumptions, open questions. |
 | `/spec-critic` | Copilot chat | Gate 1. Reviews coverage, testability, feasibility, edge cases, size. `APPROVED` or `REJECTED` with the required fix. On APPROVED you reply **approve** and it records `status: approved` — the one human gate before the loop. |
-| `semipilot preflight export-orders-csv` | terminal, evening | Checks (approved requirements, tags, clean tree, knowledge layer healthy, Copilot answers) and the planner's questions → `open-questions.md`. Answer them inline; run it again until it says *Ready*. |
-| `semipilot run export-orders-csv` | terminal, night | PilotInLoop. Also does the preflight, so on a small feature you can skip the evening step. |
-| `semipilot review export-orders-csv` | terminal, morning | The report: assumptions the loop made (read these first), blocked tasks, what got done, check results, a PR draft. |
+| `semipilot preflight export-orders-csv` | terminal | Checks (approved requirements, tags, clean tree, knowledge layer healthy, Copilot answers) and the planner's questions → `open-questions.md`. Answer them inline; run it again until it says *Ready*. |
+| `semipilot run export-orders-csv` | terminal | PilotInLoop. Also does the preflight, so on a small feature you can skip `preflight`. |
+| `semipilot review export-orders-csv` | terminal | The report: assumptions the loop made (read these first), blocked tasks, what got done, check results, a PR draft. |
 
 Then act:
 
@@ -91,7 +90,7 @@ without configuration:
 - `preflight` runs `kb-validate` and refuses to start on an unhealthy layer, like every other pipeline entry point.
 - The planner emits `knowledge_updates` (cards, instructions, ADR, dependencies, changelog line), rendered into
   `implementation-plan.md` → *Knowledge Updates Required*, which is exactly what `@scribe` works from.
-- The loop **never writes** to cards, instructions, ADRs or the changelog. The morning flow is unchanged from the
+- The loop **never writes** to cards, instructions, ADRs or the changelog. After the run the flow is unchanged from the
   manual pipeline: review, `@scribe`, commit — the pre-commit hook and CI (`kb:guard`, `kb:drift`) stay the backstop.
 
 Without it, the agents use `.github/copilot-instructions.md`, `AGENTS.md`, `.github/instructions/` and the code.

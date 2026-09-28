@@ -37,7 +37,7 @@ Report every failing check, not just the first.
 6. **Libraries.** Any new third-party dependency (or one not allowed by `docs/dependencies.md` if present) → reject.
 7. **Interfaces.** Names and signatures follow the repository's naming conventions; vague ("helper functions as
    needed") or missing for a task that creates a public name → reject. The test-writer locks tests against these;
-   imprecision here becomes a blocked task at 3 am.
+   imprecision here becomes a blocked task with nobody to ask.
 8. **Complexity.** A task whose description implies a single function doing everything ("parse, validate, persist
    and notify in `process()`") → reject with the decomposition.
 

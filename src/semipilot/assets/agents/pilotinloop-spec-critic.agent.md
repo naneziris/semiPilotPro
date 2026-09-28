@@ -32,7 +32,7 @@ Work through all of them; report every failing one (the planner fixes them in on
    dependency — each one the spec names must be addressed by some task.
 6. **Interface consistency.** `interfaces` agree between tasks that depend on each other (names, signatures, module
    paths) and follow the repository's naming conventions. A locked test written against a wrong interface blocks a
-   task for the whole night.
+   task for the whole run.
 7. **Contract changes are declared.** A task whose files hold a documented public contract must say in its
    `description` that it changes (or preserves) that contract.
 
