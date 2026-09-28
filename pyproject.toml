@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "semipilot"
+version = "0.1.0"
+description = "semiPilot: requirements → Gate 1 → PilotInLoop autonomous build on GitHub Copilot CLI, with humans at the gates."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Nikos Aneziris" }]
+dependencies = [
+  "pyyaml>=6",
+  "jsonschema>=4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+semipilot = "semipilot.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/semipilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

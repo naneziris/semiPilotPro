@@ -1,0 +1,157 @@
+# semipilot built-in defaults. Users override only what they need in `.semipilot/config.yaml`
+# (deep-merged over this file). Times are seconds unless the key says otherwise.
+
+runner:
+  command: copilot
+  model: null
+  call_timeout_seconds: 1200
+  agents:
+    planner: pilotinloop-planner
+    spec-critic: pilotinloop-spec-critic
+    plan-critic: pilotinloop-plan-critic
+    test-writer: null
+    test-fixer: null
+    implementer: null
+    health: null
+  allow_tools:
+    planner: ["read", "shell(git:*)"]
+    spec-critic: ["read", "shell(git:*)"]
+    plan-critic: ["read", "shell(git:*)"]
+    test-writer: ["read", "write", "shell"]
+    test-fixer: ["read", "write", "shell"]
+    implementer: ["read", "write", "shell"]
+    health: []
+  deny_tools:
+    - "shell(git push)"
+    - "shell(git clean)"
+    - "shell(git reset)"
+    - "shell(git checkout)"
+    - "shell(git branch)"
+    - "shell(rm)"
+    - "shell(sudo)"
+    - "shell(npm publish)"
+    - "shell(pip install)"
+    - "shell(npm install)"
+    - "shell(docker)"
+    - "shell(kubectl)"
+    - "shell(terraform)"
+    - "shell(curl)"
+    - "shell(wget)"
+    - "url"
+    - "memory"
+  forbidden_flags: ["--resume", "--continue", "--session-id", "-r"]
+  extra_flags: []
+
+# Orchestrator-private state (plan.json during the run). Outside the repo on purpose: the implementer
+# cannot read it, so it works from its own task only.
+state_dir: "~/.semipilot/state"
+
+failure_patterns:
+  fatal:
+    - "\\b401\\b"
+    - "\\b403\\b"
+    - "unauthori[sz]ed"
+    - "forbidden"
+    - "token (has )?expired"
+    - "invalid token"
+    - "bad credentials"
+    - "not (logged in|authenticated)"
+    - "no (active )?copilot (subscription|license|seat)"
+    - "entitlement"
+  quota_exhausted:
+    - "quota"
+    - "credit limit"
+    - "session limit"
+    - "premium request"
+    - "usage limit"
+    - "budget (has been )?exceeded"
+    - "out of credits"
+  transient:
+    - "\\b502\\b"
+    - "\\b503\\b"
+    - "\\b504\\b"
+    - "\\b429\\b"
+    - "rate limit"
+    - "too many requests"
+    - "ECONNRESET"
+    - "ECONNREFUSED"
+    - "ENOTFOUND"
+    - "ETIMEDOUT"
+    - "EAI_AGAIN"
+    - "socket hang up"
+    - "network (error|failure)"
+    - "temporarily unavailable"
+    - "service unavailable"
+    - "fetch failed"
+
+infra:
+  backoff_start_seconds: 60
+  backoff_cap_seconds: 900
+  max_outage_seconds: 5400
+  max_total_outage_seconds: 9000
+  unknown_as_transient_once: true
+  retry_window: null
+
+budget:
+  max_retries_per_task: 3
+  max_iterations: 30
+  wall_clock_seconds: 21600
+  max_critique_rounds: 2
+  max_contract_fixes_per_task: 1
+
+guardrails:
+  scope_tolerance_extra_files: 2
+  max_expected_files_per_task: 5
+  diff_cap_lines_per_task: 400
+  diff_cap_lines_per_run: 3000
+  allow_new_test_files: true
+  stuck_detection: true
+  protected_branches: ["main", "master", "develop"]
+
+tests:
+  patterns:
+    - "tests/**/*.py"
+    - "test/**/*.py"
+    - "**/*.test.ts"
+    - "**/*.test.tsx"
+    - "**/*.test.js"
+    - "**/*.spec.ts"
+    - "**/*.spec.tsx"
+    - "**/*_test.go"
+  contract_error_patterns:
+    - "ImportError"
+    - "ModuleNotFoundError"
+    - "AttributeError: module"
+    - "has no attribute"
+    - "cannot import name"
+    - "NameError"
+    - "TypeError: .*\\(\\) (got an unexpected keyword|takes|missing)"
+    - "Cannot find module"
+    - "TS2305"
+    - "TS2339"
+    - "TS2554"
+    - "is not a function"
+    - "undefined: "
+
+# Knowledge layer (docs/cards + scripts/kb, from the semiPilotPro kit). auto = use it when present.
+# When present: preflight runs validate_cmd; planner/critics/implementer retrieve cards via resolve_cmd using the
+# tags in requirements.md > Knowledge References; the plan carries a Knowledge Updates section for @scribe.
+knowledge_layer:
+  mode: auto                     # auto | on | off
+  validate_cmd: "node scripts/kb/kb-validate.mjs"
+  resolve_cmd: "node scripts/kb/kb-resolve.mjs --tags {tags}"
+
+# Filled by `semipilot init` from the detected stack; users edit these in .semipilot/config.yaml.
+checks: []
+check_output_tail_lines: 200
+
+preflight:
+  health_prompt: "Reply with exactly the word OK and nothing else."
+  auth_check_cmd: null
+  token_expiry_env: "COPILOT_TOKEN_EXPIRES_AT"
+  quota_check_cmd: null
+  criterion_tag_regex: "\\[check:\\s*(?P<ref>[^\\]]+)\\]"
+
+git:
+  branch_prefix: "semipilot/"
+  commit_prefix: "[semipilot]"

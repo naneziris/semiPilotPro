@@ -1,94 +1,169 @@
-# ai-ready-kit
+# semipilot
 
-Everything needed to make a repository AI-ready: a deterministic **knowledge
-layer** (module cards + closed vocabulary + zero-dependency scripts that
-retrieve, validate, and drift-check it), the **enforcement** that keeps it
-true (pre-commit hook, CI workflow, Copilot instruction files), and
-optionally the **SemiPilot pipeline** (requirements → two self-running critic gates →
-plan → implement → scribe) rewired to run on that layer, and on top of that the
-**PilotInLoop** — the same agents driven by a Python orchestrator that plans,
-critiques, writes locked tests and implements a feature unattended, with the
-human only at the front (refine + answer questions) and the back (morning review).
+The semiPilot pipeline as one installable tool: refine requirements, pass Gate 1, then let **PilotInLoop** plan,
+write the tests first, implement task by task on GitHub Copilot CLI, and leave you a report and a branch to review
+in the morning.
 
-Extracted from a real production installation and generalized for any repo.
-Read in this order: `INSTALL.md` (how to adopt), `USAGE.md` (the day-to-day
-flow + what is scripted vs. AI and what costs tokens), `RETRIEVAL.md` (how
-cards, the vocabulary, and the manifest turn tags into an exact reading list —
-the progressive-disclosure mechanics), `PLAYBOOK.md` (the design reasoning). Adopting in a large workspace monorepo? `MONOREPO.md` is
-the phased, size-proof rollout plan.
+You stay at the two places where judgment matters — the requirements and their approval at the front, the review at
+the back. Everything in between is a loop that cannot push, cannot weaken a test, cannot wander outside its task,
+and stops the moment it would have to guess. Same agents, same artifacts and same vocabulary as semiPilotPro
+(`@refiner` → `requirements.md`, `@spec-critic`, `implementation-plan.md`, `decisions.md`, `@scribe`) — just
+without the setup.
 
-## Quick start
+## Install
 
 ```bash
-./install.sh /path/to/your-repo yourapp                  # knowledge layer only
-./install.sh /path/to/your-repo yourapp --with-pipeline  # + SemiPilot pipeline
-./install.sh /path/to/your-repo yourapp --with-pilotinloop # + pipeline + PilotInLoop
-cd /path/to/your-repo
-git config core.hooksPath .githooks
-# then, in VS Code Copilot chat:
-#   /bootstrap-knowledge-layer
+pipx install git+https://github.com/naneziris/semiPilotPro.git@v4   # PyPI: coming
 ```
 
-The installer only copies files (never overwrites — safe to re-run); the
-bootstrap prompt does the knowledge work with you approving every
-knowledge-defining step. Budget ½–2 days per repo depending on size.
+Prerequisites: git, Python 3.9+, and the [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli)
+on your PATH and logged in (`copilot login`). VS Code with Copilot Chat for the two interactive steps.
 
-## What's in here
+## Use
 
-```
-install.sh                     # mechanical installer (copy + {{SYSTEM}}/{{REPO_NAME}} substitution)
-INSTALL.md                     # the adoption guide — read this
-PLAYBOOK.md                    # the why: principles, artifact inventory, pitfalls
-core/
-  scripts/kb/                  # the 6 zero-dep scripts: validate, index(+check), resolve, drift, guard (+lib)
-  githooks/pre-commit          # blocks commits on broken cards / stale manifest
-  workflows/knowledge-layer.yml# CI: validate+check blocking, drift warning, guard nag
-  vscode/settings.json         # chat.useAgentsMdFile
-  prompts/                     # /impact, /new-card, /sync-cards
-templates/                     # {{TODO}}-marked starting points the bootstrap fills:
-                               # copilot-instructions, area instructions, AGENTS router block,
-                               # vocabulary, card, docs/README (layer manual),
-                               # decisions (ADRs), dependencies, CHANGELOG
-pipeline/                      # optional: SemiPilot Pro patched for the knowledge layer
-  agents/                      # refiner, spec-critic, planner, implementer, pattern-critic, scribe
-  prompts/                     # run-pipeline, gate-triage, refine/plan/implement, fix-rejection, …
-  skills/code-analyzer/        # complexity checks for the rail + Gate 2
-  semipilot-core.md            # the machine contract
-  INSTRUCTIONS.template.md     # the human manual (installed as INSTRUCTIONS.md)
-  agents/pilotinloop-*.agent.md  # the 3 loop-only agents: planner (questions / plan.json), spec-critic, plan-critic
-  PILOTINLOOP.template.md      # the runbook (installed as PILOTINLOOP.md): setup, evening, night, morning, troubleshooting
-  pilotinloop/                   # optional: autonomous loop (installed as .github/pilotinloop/ + Makefile)
-    orchestrator.py, runner.py # the loop + Copilot CLI runner (fresh process per task, guardrails, breaker)
-    config.yaml                # checks, budgets, deny-list, failure patterns — everything tunable
-    prompts/, tests/, Makefile # role prompts; 50-test suite with a fake Copilot CLI
-docs/
-  pilotinloop-handoff-v2.md      # design of record for PilotInLoop
-  copilot-cli-findings.md      # what the Copilot CLI verifiably supports headless (and what is unverified)
-bootstrap/
-  bootstrap-knowledge-layer.prompt.md  # /bootstrap-knowledge-layer — AI-guided adoption with human gates
-  cartographer.agent.md                # parallel card drafter for large repos
-  generate-agents-md.prompt.md         # lightweight path: standalone AGENTS.md for a repo NOT getting the full kit
+**Once per repository**
+
+```bash
+cd your-repo
+semipilot init        # detects your stack, writes .semipilot/config.yaml, the two chat prompts, the agents, an instructions template
+semipilot doctor      # tells you what is still missing
 ```
 
-## Requirements & scope
+Open `.semipilot/config.yaml` and confirm the `checks` (lint / typecheck / test / build). They define "done": a
+task is only accepted when every check passes. Then fill in `.github/copilot-instructions.md` — one page of
+commands, conventions and architecture that every agent reads first. If Copilot makes the same mistake twice, add a
+line there. Have the semiPilotPro knowledge layer installed (`docs/cards/` + `scripts/kb/`)? `init` detects it and
+everything below uses it — see *With the knowledge layer*.
 
-- **Node ≥ 20** to run the kb scripts (they have zero npm dependencies).
-- `kb-drift` analyzes **TypeScript/JavaScript** via the repo's own
-  `typescript` package; configure layout in `scripts/kb/kb.config.json`.
-  Other languages: everything else works — disable the drift CI job or swap
-  in your own import extractor (one function).
-- The hook/CI/prompts assume `npm run kb:*` aliases; the installer wires them
-  into `package.json` when present, otherwise adjust to direct `node` calls.
-- Pipeline layer targets **GitHub Copilot in VS Code** (`.agent.md`,
-  `.prompt.md`, `applyTo` instruction files).
-- PilotInLoop needs **Python ≥ 3.9** with `pyyaml` (+ `jsonschema` ≥ 4,
-  `pytest` for its own tests), `make`, and the **Copilot CLI** on PATH,
-  logged in. Its error classification is regex on CLI output and must be
-  tuned after a first supervised dry run (`docs/copilot-cli-findings.md`).
+**Per feature**
 
-## The one rule that keeps it alive
+| Step | Where | What happens |
+|---|---|---|
+| `/refine-requirements export orders as CSV` | Copilot chat | `@refiner`: confirms tags (knowledge layer) or explores the code, asks at most five questions, writes `requirements.md` — problem, scope, impact analysis, acceptance criteria each tagged with the check that proves it (`[check: test_csv_has_header]`), assumptions, open questions. |
+| `/spec-critic` | Copilot chat | Gate 1. Reviews coverage, testability, feasibility, edge cases, size. `APPROVED` or `REJECTED` with the required fix. On APPROVED you reply **approve** and it records `status: approved` — the one human gate before the loop. |
+| `semipilot preflight export-orders-csv` | terminal, evening | Checks (approved requirements, tags, clean tree, knowledge layer healthy, Copilot answers) and the planner's questions → `open-questions.md`. Answer them inline; run it again until it says *Ready*. |
+| `semipilot run export-orders-csv` | terminal, night | PilotInLoop. Also does the preflight, so on a small feature you can skip the evening step. |
+| `semipilot review export-orders-csv` | terminal, morning | The report: assumptions the loop made (read these first), blocked tasks, what got done, check results, a PR draft. |
 
-Stale metadata is worse than none. Cards update in the same PR as the code
-they describe — the guard nags, the scribe maintains, the hook and CI
-enforce. When any agent says "the cards don't cover X", fix the cards; never
-work around them.
+Then act:
+
+```bash
+semipilot rollback export-orders-csv T3   # a wrong assumption: revert T3 and everything built on it
+semipilot resume export-orders-csv        # continue after fixing the requirements, an outage, or a block
+semipilot status                          # where every feature stands
+```
+
+The loop works on a branch `semipilot/<feature>-<date>` and never pushes. Review the diff, run `@scribe` if you have
+the knowledge layer, open the PR yourself. Keep the machine awake for the run (`caffeinate -i semipilot run …` on
+a Mac, or a server / dev container).
+
+## What PilotInLoop does, unattended
+
+1. **Plan.** `@pilotinloop-planner` turns the requirements into small tasks (≤ 5 files each) with explicit interfaces.
+   The accepted plan is written as `implementation-plan.md` — tasks, files, test plan, interfaces, and a
+   *Knowledge Updates Required* section for `@scribe`.
+2. **Critique.** `@pilotinloop-spec-critic` (fidelity to the requirements) and `@pilotinloop-plan-critic`
+   (conventions, contracts, sizing). Two rejected rounds halt the run rather than build the wrong thing;
+   rejections go to `rejection-log.md`.
+3. **Tests first.** One locked test file per task, written against the planned interfaces before any code exists.
+   The implementer can add tests; it can never modify these.
+4. **Implement.** One fresh Copilot process per task, with only that task, the requirements, the answers and the
+   decisions log. After each attempt the orchestrator — not the agent — checks the test lock, the scope, the diff
+   size, and runs your `checks`. Failure: retry with the failed diff still in the tree and the errors in the prompt.
+   Same error twice: stop, mark the task blocked, move on.
+5. **Report.** Full suite once at the end, then `report.md` and a state commit. Wherever the requirements were
+   silent the loop chose the most reversible option and wrote it to `decisions.md`, or stopped with
+   `BLOCKED: <question>`.
+
+Copilot outages back off and retry without blaming the task; a long outage trips a breaker and `resume` picks up
+where it stopped. Auth failures and quota exhaustion halt immediately.
+
+## With the knowledge layer
+
+If the repo has the semiPilotPro knowledge layer (`docs/cards/_vocabulary.md` and `scripts/kb/`), semipilot uses it
+without configuration:
+
+- `@refiner` validates it, proposes tags from the closed vocabulary, retrieves cards with `kb-resolve` and builds
+  the impact analysis from the cards' `depends_on` / `public_contracts` / `invariants`; the tags land under
+  *Knowledge References* in `requirements.md`.
+- `@spec-critic` and the loop's planner, critics, test-writer and implementer all retrieve through `kb-resolve`
+  with those tags and read only the resolved set; card invariants and contracts are hard constraints.
+- `preflight` runs `kb-validate` and refuses to start on an unhealthy layer, like every other pipeline entry point.
+- The planner emits `knowledge_updates` (cards, instructions, ADR, dependencies, changelog line), rendered into
+  `implementation-plan.md` → *Knowledge Updates Required*, which is exactly what `@scribe` works from.
+- The loop **never writes** to cards, instructions, ADRs or the changelog. The morning flow is unchanged from the
+  manual pipeline: review, `@scribe`, commit — the pre-commit hook and CI (`kb:guard`, `kb:drift`) stay the backstop.
+
+Without it, the agents use `.github/copilot-instructions.md`, `AGENTS.md`, `.github/instructions/` and the code.
+Force either way with `knowledge_layer: {mode: on|off}` in `.semipilot/config.yaml`.
+
+## What it will never do
+
+Push, merge, deploy, install packages, edit your instructions files or knowledge layer, weaken a test, resume a
+Copilot session, or decide on its own that the work is done.
+
+## Files it leaves in your repo
+
+```
+.semipilot/config.yaml                          the one file you edit
+.semipilot/features/<feature>/                  requirements.md · open-questions.md · implementation-plan.md · plan.json
+                                                decisions.md · rejection-log.md · report.md · implementation-progress.json
+.semipilot/runs/                                per-call logs (git-ignored)
+.github/prompts/refine-requirements.prompt.md   /refine-requirements
+.github/prompts/spec-critic.prompt.md           /spec-critic
+.github/agents/refiner.agent.md                 the two interactive agents …
+.github/agents/spec-critic.agent.md
+.github/agents/pilotinloop-*.agent.md           … and the three loop-only ones (planner, spec-critic, plan-critic)
+.github/copilot-instructions.md                 yours — created only if missing
+```
+
+Coming from semiPilotPro? `init` never overwrites your files. An existing `@refiner` that writes to
+`.github/requirements/requirements.md` keeps working: `semipilot run` uses that folder as-is when no per-feature
+folder exists (`doctor` tells you; `semipilot init --force` swaps in the semipilot versions of the two agents).
+
+Advanced: `semipilot config` prints the full effective configuration (budgets, guardrails, tool deny-list, failure
+patterns); override any key in `.semipilot/config.yaml`. Put a file in `.semipilot/prompts/<name>.md` to override a
+loop prompt (`planner-questions`, `planner-plan`, `spec-critic`, `plan-critic`, `test-writer`, `implementer`,
+`test-fixer`).
+
+## Honest limits
+
+- The Copilot CLI's error strings for 5xx / 429 / 401 / quota are matched by regex (`failure_patterns`) and were
+  not verified against every version. After your first real run, look for calls classified `unknown` in
+  `.semipilot/runs/<run>/` and add their signature to the config.
+- The loop's definition of done is "your checks pass". Weak tests produce confidently wrong code. Use it for
+  well-specified features in areas with a real test suite; use the manual pipeline for the rest.
+- Go and `make`-based repos run the whole test set per task (no per-file scoping). It works, it is just slower.
+
+## How this maps to the AI-native SDLC playbook
+
+Plan + Design → `requirements.md` (agent-drafted with the human, critic-reviewed, human-approved). Build →
+`implementation-plan.md` + tasks, executed by the loop. Test → locked tests written first, continuous checks, a
+full-suite verification at the end. Deploy → a branch and a PR draft; humans and your existing PR review own the
+gate. Maintain → `@scribe` keeps the knowledge layer true; a monitoring hook that files a new `requirements.md`
+from a production signal would close the loop and is not in scope yet.
+
+## Developing
+
+```bash
+git clone … && cd semipilot
+pip install -e ".[dev]"
+pytest -q                 # 65 tests against a fake Copilot CLI (outages, quota, lock violations, rollbacks, knowledge layer, legacy layout …)
+```
+
+## Repository layout
+
+```
+src/semipilot/        the CLI and the PilotInLoop orchestrator (this README)
+tests/                its test suite (fake Copilot CLI)
+GETTING-STARTED.md    knowledge layer install + the per-feature flow, on one page
+pipeline/, core/, bootstrap/, templates/, install.sh
+                      the original semiPilotPro kit (manual pipeline + knowledge layer + PilotInLoop v2);
+                      still installable with ./install.sh — see docs/KIT-README.md, INSTALL.md, USAGE.md
+```
+
+Install from this repository until it is on PyPI:
+
+```bash
+pipx install git+https://github.com/naneziris/semiPilotPro.git@v4
+```
