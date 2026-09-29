@@ -14,7 +14,7 @@ import shutil
 from importlib import resources
 from pathlib import Path
 
-import yaml
+from ._yaml import yaml
 
 from .config import SEMIPILOT_DIR, Layout, knowledge_layer_present
 from .detect import Detected, detect

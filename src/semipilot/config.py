@@ -9,7 +9,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from ._yaml import yaml
 
 SEMIPILOT_DIR = ".semipilot"
 CONFIG_FILE = "config.yaml"

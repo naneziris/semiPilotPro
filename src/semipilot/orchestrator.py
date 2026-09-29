@@ -170,9 +170,13 @@ def validate_plan(plan: dict, cfg: dict, criteria: Optional[list[dict]] = None) 
     try:
         import jsonschema
 
-        for e in jsonschema.Draft202012Validator(load_schema()).iter_errors(plan):
+        validator = jsonschema.Draft202012Validator  # jsonschema >= 4.0
+    except (ImportError, AttributeError):  # not installed, or too old (e.g. 3.x shipped with an OS)
+        validator = None
+    if validator is not None:
+        for e in validator(load_schema()).iter_errors(plan):
             errors.append(f"schema: {'/'.join(str(p) for p in e.absolute_path)}: {e.message}")
-    except ImportError:
+    else:
         if not isinstance(plan.get("tasks"), list) or not plan.get("feature"):
             errors.append("schema: plan must have 'feature' and 'tasks'")
     if errors:

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run semipilot straight from this checkout / download — no pip, no pipx, no venv.
+# Needs python3 (>= 3.9) on PATH. Put this bin/ directory on your PATH, or symlink this file into ~/bin.
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+PYTHONPATH="$here/src${PYTHONPATH:+:$PYTHONPATH}" exec "${PYTHON:-python3}" -m semipilot "$@"

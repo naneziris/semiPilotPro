@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
+from ._yaml import yaml
 
 from . import __version__
 from .config import Layout, knowledge_layer_present, load_config

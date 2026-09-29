@@ -44,6 +44,10 @@ semipilot init          # detects your stack and the knowledge layer; installs /
 semipilot doctor        # confirm the checks in .semipilot/config.yaml and that Copilot answers
 ```
 
+No pip or pipx on the machine? Download the `v4` branch as a ZIP instead, unzip it, and put its `bin/` folder on
+your PATH — `bin/semipilot` (and `bin\semipilot.cmd` on Windows) runs it straight from the folder. Details in the
+README under *Install*.
+
 Then, for every new feature:
 
 1. **Refine.** In VS Code Copilot chat: `/refine-requirements <your idea>`. `@refiner` confirms the tags with

@@ -18,6 +18,29 @@ pipx install git+https://github.com/naneziris/semiPilotPro.git@v4   # PyPI: comi
 Prerequisites: git, Python 3.9+, and the [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli)
 on your PATH and logged in (`copilot login`). VS Code with Copilot Chat for the two interactive steps.
 
+### No pip / pipx? Install from a download
+
+The tool is pure Python and bundles its one runtime dependency, so a plain copy of the files runs as-is.
+Download the `v4` branch as a ZIP from GitHub (Code → Download ZIP, or
+`https://github.com/naneziris/semiPilotPro/archive/refs/heads/v4.zip`), unzip it anywhere, and put its `bin/`
+folder on your PATH:
+
+```bash
+unzip semiPilotPro-v4.zip && cd semiPilotPro-v4
+export PATH="$PWD/bin:$PATH"        # or: ln -s "$PWD/bin/semipilot" ~/bin/semipilot
+semipilot --version
+```
+
+On Windows, add the unzipped `bin\` folder to PATH (`bin\semipilot.cmd` finds Python via the `py` launcher or
+`python`). Both launchers run `python -m semipilot` with `src/` on the path — nothing is installed and nothing is
+written outside the folder, so removing the folder uninstalls it.
+
+Copying only `src/semipilot/` also works: keep the folder whole (it carries the agents, prompts, `defaults.yaml`,
+the plan schema and a bundled PyYAML in `_vendor/`), put it somewhere on the path, and run `python -m semipilot`
+(the `semipilot` command itself comes from pip; without it use `python -m semipilot` or a launcher like `bin/`).
+Without `jsonschema` (or with the 3.x version some OSes ship) the plan is validated by shape only; `pip`/`pipx`
+installs get the full JSON-schema check.
+
 ## Use
 
 **Once per repository**
@@ -153,7 +176,8 @@ pytest -q                 # 65 tests against a fake Copilot CLI (outages, quota,
 ## Repository layout
 
 ```
-src/semipilot/                       the CLI and the PilotInLoop orchestrator
+src/semipilot/                       the CLI and the PilotInLoop orchestrator (_vendor/: bundled PyYAML for pip-less use)
+bin/                                 launchers to run from a plain download (semipilot, semipilot.cmd)
 tests/                               its test suite (fake Copilot CLI)
 GETTING-STARTED.md                   knowledge layer install + the per-feature flow, on one page
 docs/pilotinloop-handoff-v2.md       design of record for the loop (why it is built the way it is)
@@ -168,3 +192,5 @@ Install from this repository until it is on PyPI:
 ```bash
 pipx install git+https://github.com/naneziris/semiPilotPro.git@v4
 ```
+
+No pip on the machine? See *No pip / pipx? Install from a download* under Install above.
