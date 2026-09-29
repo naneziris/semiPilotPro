@@ -520,7 +520,38 @@ class Loop:
         return self.questions_path.read_text(encoding="utf-8") if self.questions_path.exists() else "(no questions were asked)"
 
     def branch_name(self) -> str:
-        return f"{self.cfg['git']['branch_prefix']}{self.feature}-{self.now().strftime('%Y%m%d')}"
+        """The run branch, from `git.branch` in the config: {type}/{feature} by default (conventional-branch
+        style; {type} comes from the spec's frontmatter, feat when absent)."""
+        g = self.cfg["git"]
+        template = g.get("branch") or f"{g.get('branch_prefix', 'semipilot/')}{{feature}}-{{date}}"  # pre-0.2 configs
+        fm = parse_frontmatter(self.spec_text())
+        kind = re.sub(r"[^a-z0-9-]", "", str(fm.get("type") or "feat").lower()) or "feat"
+        return template.format(type=kind, feature=self.feature, date=self.now().strftime("%Y%m%d"))
+
+    def commit_message(self, subject: str, kind: Optional[str] = None) -> str:
+        """A commit message from `git.commit`: {type}({feature}): {subject}. `kind` overrides the type for the
+        loop's own commits (test, docs, chore); tasks use the spec's type (feat by default)."""
+        g = self.cfg["git"]
+        template = g.get("commit") or f"{g.get('commit_prefix', '[semipilot]')} {{subject}}"  # pre-0.2 configs
+        if kind is None:
+            fm = parse_frontmatter(self.spec_text())
+            kind = re.sub(r"[^a-z0-9-]", "", str(fm.get("type") or "feat").lower()) or "feat"
+        subject = subject[:1].lower() + subject[1:] if subject else subject
+        return template.format(type=kind, feature=self.feature, subject=subject)
+
+    def run_branches(self) -> dict[str, str]:
+        """Branches created by earlier runs in this project: branch → feature (from each feature's progress file)."""
+        out = {}
+        for slug in self.lay.list_features():
+            pp = self.lay.progress(slug)
+            if pp.exists():
+                try:
+                    b = json.loads(pp.read_text(encoding="utf-8")).get("branch")
+                except (OSError, ValueError):
+                    continue
+                if b:
+                    out[b] = slug
+        return out
 
     def ensure_gitignore(self) -> None:
         gi = self.lay.root / ".gitignore"
@@ -620,15 +651,26 @@ class Loop:
         dirty = self.git.status_paths()
         if dirty and all(f.startswith(feat_rel) or f.startswith(self.lay.rel(self.lay.root) + "/.gitignore") for f in dirty):
             self.git.run("add", "-A", "--", feat_rel, self.lay.rel(self.lay.root / ".gitignore"))
-            self.git.run("commit", "-q", "-m", f"{self.cfg['git']['commit_prefix']} {self.feature}: {what}")
+            self.git.run("commit", "-q", "-m", self.commit_message(what, kind="docs"))
             self.log(f"committed {feat_rel} ({what})")
 
-    def check_tree(self) -> None:
+    def check_tree(self, stack: bool = False) -> None:
         self.commit_feature_files("spec and answers")
         if self.git.is_dirty():
             raise PreflightError("working tree is dirty; commit or stash before a run")
         if self.git.branch_exists(self.branch_name()):
-            raise PreflightError(f"branch {self.branch_name()} already exists; delete it or wait a day (the date is in the name)")
+            raise PreflightError(f"branch {self.branch_name()} already exists; delete it, or pass --branch <name> "
+                                 f"(the pattern is `git.branch` in .semipilot/config.yaml)")
+        base = self.git.current_branch()
+        earlier = self.run_branches()
+        if base in earlier and not stack:
+            raise PreflightError(f"you are on {base}, the branch of an earlier semipilot run ({earlier[base]}). The run "
+                                 f"branches off the branch you are on, so this would stack the feature on top of that "
+                                 f"unreviewed work. Check out your base branch first (e.g. `git checkout main`), or pass "
+                                 f"--stack if stacking is what you want.")
+        if base == "HEAD":
+            raise PreflightError("detached HEAD; check out the branch the feature should be built on")
+        self.log(f"base: {base} @ {self.git.head()[:10]} → the run will create {self.branch_name()} from here")
 
     def check_copilot(self) -> None:
         res = self.runner.invoke("health", self.cfg["preflight"]["health_prompt"], "health")
@@ -659,14 +701,16 @@ class Loop:
         return n
 
     # ------------------------------------------------------------------ run
-    def run(self, skip_questions: bool = False, preflight_only: bool = False) -> str:
+    def run(self, skip_questions: bool = False, preflight_only: bool = False, stack: bool = False) -> str:
         """Full run. Raises NeedsAnswers when the human has questions to answer first.
-        `preflight_only` stops after the checks and the questions (step 3 of the flow)."""
+        `preflight_only` stops after the checks and the questions (step 3 of the flow).
+        The run branch is created from the branch that is checked out; `stack` allows that to be another
+        semipilot branch."""
         self.ensure_gitignore()
         self.check_config()
         crit = self.check_spec()
         self.check_knowledge_layer()
-        self.check_tree()
+        self.check_tree(stack=stack)
         self.log(f"{self.feature}: {len(crit)} tagged acceptance criteria, requirements approved, tree clean")
 
         # temporary progress for the preflight logs
@@ -697,6 +741,7 @@ class Loop:
             raise PreflightError("working tree is dirty; commit or stash before a run")
 
         # the real run
+        base_branch = self.git.current_branch()
         branch = self.branch_name()
         self.git.create_branch(branch)
         run_id = f"{self.feature}-{self.now().strftime('%Y%m%d-%H%M%S')}"
@@ -707,7 +752,7 @@ class Loop:
                                        encoding="utf-8")
         self.make_runner()
         self.save()
-        self.log(f"run {run_id} on branch {branch}")
+        self.log(f"run {run_id} on branch {branch} (from {base_branch})")
         try:
             self.stage_plan(crit)
             self.stage_tests(crit)
@@ -778,7 +823,7 @@ class Loop:
         paths.append(self.lay.rel(self.lay.root / ".gitignore"))
         self.git.run("add", "-A", "--", *paths)
         if self.git.run("diff", "--cached", "--name-only").strip():
-            self.git.run("commit", "-q", "-m", f"{self.cfg['git']['commit_prefix']} state: {self.progress.stop_reason or 'update'}")
+            self.git.run("commit", "-q", "-m", self.commit_message(f"run state ({self.progress.stop_reason or 'update'})", kind="chore"))
 
     def maybe_schedule_retry(self) -> None:
         win = self.cfg["infra"].get("retry_window")
@@ -869,7 +914,7 @@ class Loop:
             self.git.restore_paths(self.progress.base_commit, non_test)
             self.progress.warnings.append(f"test-writer touched non-test files, reverted: {', '.join(non_test)}")
         self.lock.lock()
-        sha = self.git.commit(f"{self.cfg['git']['commit_prefix']} tests: locked acceptance tests", exclude=self.managed())
+        sha = self.git.commit(self.commit_message("acceptance tests (locked)", kind="test"), exclude=self.managed())
         self.progress.tests_commit = sha
         self.log(f"locked {len(self.lock.checksums)} test file(s) at {sha[:8]}")
         self.save()
@@ -957,7 +1002,7 @@ class Loop:
             ok, errors, results = run_checks(self.cfg, self.repo, task_tests=self.task_tests(task))
             self.progress.check_results = results
             if ok:
-                sha = self.git.commit(f"{self.cfg['git']['commit_prefix']} {task['id']}: {task['title']}", exclude=self.managed())
+                sha = self.git.commit(self.commit_message(f"{task['title']} ({task['id']})"), exclude=self.managed())
                 entry["commit"] = sha
                 entry["diff"] = self.git.stat_between(base, sha)
                 self.mark(entry, "done")
@@ -968,7 +1013,7 @@ class Loop:
                 if self.fix_test_contract(task, errors):
                     ok, errors, results = run_checks(self.cfg, self.repo, task_tests=self.task_tests(task))
                     if ok:
-                        sha = self.git.commit(f"{self.cfg['git']['commit_prefix']} {task['id']}: {task['title']}", exclude=self.managed())
+                        sha = self.git.commit(self.commit_message(f"{task['title']} ({task['id']})"), exclude=self.managed())
                         entry["commit"], entry["diff"] = sha, self.git.stat_between(base, sha)
                         self.mark(entry, "done")
                         return

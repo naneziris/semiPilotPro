@@ -63,8 +63,10 @@ Then, for every new feature:
 4. **Run.** `semipilot run <feature>` on a machine that stays awake (`caffeinate -i …` on a Mac, or a dev
    container). PilotInLoop plans (`implementation-plan.md`), passes two critic gates, writes locked tests first,
    implements one task per fresh Copilot process, runs your checks after every attempt, and commits each passing
-   task on `semipilot/<feature>-<date>`. It never pushes and never touches the knowledge layer. Takes minutes to
-   hours depending on the feature; you do not need to watch it.
+   task on its own branch (`feat/<feature>` by default, see `git.branch` in `.semipilot/config.yaml`) as a
+   conventional commit (`feat(<feature>): <task>`), no bot marker — squash at merge time if that is your team's
+   convention. It never pushes and never touches the knowledge layer. Takes minutes to hours depending on the
+   feature; you do not need to watch it.
 5. **Review.** `semipilot review <feature>`. Read the report in order: assumptions the loop made
    (`decisions.md`), blocked tasks and their question, completed tasks, check results, warnings. Wrong assumption
    → `semipilot rollback <feature> T<n>`, fix `requirements.md`, `semipilot resume <feature>`. Blocked or

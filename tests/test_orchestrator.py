@@ -3,7 +3,7 @@ import json
 import pytest
 
 from semipilot import orchestrator as orch
-from conftest import ADD_BAD, ADD_OK, MUL_OK, PLAN, QUESTIONS, TEST_FILE_GOOD, TEST_FILE_MUL, step, write
+from conftest import ADD_BAD, ADD_OK, MUL_OK, PLAN, QUESTIONS, SPEC, TEST_FILE_GOOD, TEST_FILE_MUL, step, write
 
 
 # ---------------------------------------------------------------- happy path
@@ -15,9 +15,10 @@ def test_happy_path_two_tasks(h):
     assert [t["status"] for t in p["tasks"]] == ["done", "done"]
     assert [t["attempts"] for t in p["tasks"]] == [1, 1]
     log = h.log()
-    assert "[semipilot] T1: add function" in log and "[semipilot] T2: mul function" in log
-    assert "[semipilot] tests: locked acceptance tests" in log
-    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip().startswith("semipilot/calc-")
+    assert "feat(calc): add function (T1)" in log and "feat(calc): mul function (T2)" in log
+    assert "test(calc): acceptance tests (locked)" in log and "chore(calc): run state (completed)" in log
+    assert "semipilot" not in log.lower()  # no bot marker anywhere in history
+    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/calc"
     assert h.git("status", "--porcelain").strip() == ""  # state committed, logs ignored
     # plan.json lives outside the repo during the run and is copied into the feature folder at the end
     assert (h.state / "repo" / p["run_id"] / "plan.json").exists()
@@ -48,7 +49,7 @@ def test_questions_stop_the_run_until_answered(h):
         h.run()
     assert e.value.count == 1
     assert (h.feat / "open-questions.md").read_text().startswith("# Open questions")
-    assert "semipilot/calc-" not in h.git("branch")  # no branch created yet
+    assert "feat/calc" not in h.git("branch")  # no branch created yet
     # human answers inline and commits, then the run proceeds and the planner sees the answers
     (h.feat / "open-questions.md").write_text(QUESTIONS.replace("- Answer:", "- Answer: ints only"))
     h.git("add", "-A")
@@ -67,7 +68,7 @@ def test_uncommitted_answers_are_committed_for_you(h):
     (h.feat / "open-questions.md").write_text(QUESTIONS.replace("- Answer:", "- Answer: ints only"))
     o, reason = h.run()  # no git add/commit by the human
     assert reason == "completed"
-    assert "[semipilot] calc: spec and answers" in h.log()
+    assert "docs(calc): spec and answers" in h.log()
 
 
 def test_answered_questions_count():
@@ -323,7 +324,7 @@ def test_rollback_reverts_task_and_dependents(h):
     assert [t["status"] for t in p["tasks"]] == ["pending", "pending"]
     assert not (h.repo / "calc/add.py").exists() and not (h.repo / "calc/mul.py").exists()
     assert (h.repo / "tests/test_calc.py").exists()
-    assert 'Revert "[semipilot] T2' in h.log()
+    assert 'Revert "feat(calc): mul function (T2)' in h.log()
 
 
 # ---------------------------------------------------------------- knowledge layer integration
@@ -396,7 +397,7 @@ def test_project_in_subfolder_of_monorepo(h_sub):
     assert [t["status"] for t in h.progress()["tasks"]] == ["done", "done"]
     assert o.git.prefix == "apps/api/"
     log = h.log()
-    assert "[semipilot] T1: add function" in log and "[semipilot] tests: locked acceptance tests" in log
+    assert "feat(calc): add function (T1)" in log and "test(calc): acceptance tests (locked)" in log
     assert h.git("status", "--porcelain").strip() == ""
     # everything landed under the project, nothing at the git root
     assert (h.repo / "calc" / "add.py").exists() and not (h.git_root / "calc").exists()
@@ -428,3 +429,56 @@ def test_subfolder_dirty_sibling_blocks_the_run(h_sub):
     h.scenario()
     with pytest.raises(orch.PreflightError, match="dirty"):
         h.run()
+
+
+# ------------------------------------------------------------------ the run branches off the branch you are on
+def test_run_says_which_branch_it_starts_from(h):
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed"
+    log = (h.feat / "implementation-progress.json").read_text()
+    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip() == o.progress.branch
+    assert h.git("merge-base", "main", o.progress.branch).strip() == h.git("rev-parse", "main").strip()
+
+
+def test_run_refuses_to_start_from_another_semipilot_branch_unless_stack(h):
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed"
+    first = o.progress.branch
+    # second feature, standing on the first feature's branch
+    feat2 = h.repo / ".semipilot" / "features" / "calc2"
+    feat2.mkdir()
+    (feat2 / "requirements.md").write_text(SPEC.replace("feature: calc", "feature: calc2").replace("Requirement: calc", "Requirement: calc2"))
+    h.git("add", "-A"); h.git("commit", "-q", "-m", "spec calc2")
+    o2 = orch.Loop(h.repo, h.cfg, "calc2", sleep_fn=h.sleeps.append)
+    with pytest.raises(orch.PreflightError, match="branch of an earlier semipilot run"):
+        h._in_repo(lambda: o2.run(preflight_only=True))
+    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip() == first  # nothing happened
+    # explicitly allowed: the preflight passes and the branch would be made from the first feature's branch
+    o3 = orch.Loop(h.repo, h.cfg, "calc2", sleep_fn=h.sleeps.append)
+    assert h._in_repo(lambda: o3.run(preflight_only=True, stack=True)) == "preflight_ok"
+
+
+def test_branch_name_follows_config_and_spec_type(h):
+    o = h.loop()
+    assert o.branch_name() == "feat/calc"
+    (h.feat / "requirements.md").write_text(SPEC.replace("status: approved", "status: approved\ntype: fix"))
+    assert o.branch_name() == "fix/calc"
+    cfg = json.loads(json.dumps(h.cfg))
+    cfg["git"]["branch"] = "feature/{feature}-{date}"
+    o2 = h.loop(cfg)
+    assert o2.branch_name().startswith("feature/calc-20")
+    legacy = json.loads(json.dumps(h.cfg)); del legacy["git"]["branch"]; legacy["git"]["branch_prefix"] = "sp/"
+    assert h.loop(legacy).branch_name().startswith("sp/calc-20")
+
+
+def test_commit_messages_follow_config_and_spec_type(h):
+    o = h.loop()
+    assert o.commit_message("Add function (T1)") == "feat(calc): add function (T1)"
+    assert o.commit_message("acceptance tests", kind="test") == "test(calc): acceptance tests"
+    (h.feat / "requirements.md").write_text(SPEC.replace("status: approved", "status: approved\ntype: fix"))
+    assert o.commit_message("handle zero (T1)") == "fix(calc): handle zero (T1)"
+    legacy = json.loads(json.dumps(h.cfg)); del legacy["git"]["commit"]; legacy["git"]["commit_prefix"] = "[bot]"
+    assert h.loop(legacy).commit_message("Add function (T1)") == "[bot] add function (T1)"
+

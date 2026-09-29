@@ -153,5 +153,11 @@ preflight:
   criterion_tag_regex: "\\[check:\\s*(?P<ref>[^\\]]+)\\]"
 
 git:
-  branch_prefix: "semipilot/"
-  commit_prefix: "[semipilot]"
+  # Name of the branch a run creates (from the branch you are on). Placeholders: {type} = the spec's
+  # frontmatter `type:` (feat, fix, chore, ...; default feat), {feature} = the feature slug, {date} = YYYYMMDD.
+  # Follow your repository's convention here, e.g. "feature/{feature}" or "{type}/{feature}-{date}".
+  branch: "{type}/{feature}"
+  # Commit messages (conventional commits, no bot marker: the branch is reviewed by a human before it merges).
+  # Placeholders: {type} (feat/fix/... from the spec, or test/docs/chore for the loop's own commits),
+  # {feature} = the feature slug as scope, {subject} = what the commit does.
+  commit: "{type}({feature}): {subject}"

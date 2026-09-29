@@ -3,7 +3,8 @@
     semipilot init                 make this repo ready (config, /refine-requirements and /spec-critic, agents)
     semipilot doctor               check Copilot CLI, git, config and checks
     semipilot preflight <feature>  checks + the planner's questions, without starting the run
-    semipilot run <feature>        PilotInLoop: run the loop for approved requirements (asks its questions first)
+    semipilot run <feature>        PilotInLoop: run the loop for approved requirements on a new branch made from
+                                   the branch you are on (asks its questions first)
     semipilot status               where every feature stands
     semipilot review [feature]     print the report, assumptions first
     semipilot resume [feature]     continue an interrupted / blocked run
@@ -24,7 +25,7 @@ from ._yaml import yaml
 
 from . import __version__
 from .config import CONFIG_FILE, SEMIPILOT_DIR, Layout, knowledge_layer_present, load_config
-from .orchestrator import Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter, parse_questions
+from .orchestrator import Git, Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter, parse_questions
 
 
 def find_repo(start: Path) -> Path:
@@ -40,6 +41,14 @@ def find_repo(start: Path) -> Path:
     raise SystemExit("semipilot: not inside a git repository")
 
 
+def git_root(start: Path) -> Path:
+    p = Path(start).resolve()
+    for cand in (p, *p.parents):
+        if (cand / ".git").exists():
+            return cand
+    raise SystemExit("semipilot: not inside a git repository")
+
+
 def say(msg: str = "") -> None:
     print(msg, flush=True)
 
@@ -49,8 +58,8 @@ def cmd_init(a) -> int:
     from .initcmd import init
 
     repo = Path(a.repo).resolve() if a.here else find_repo(a.repo)
-    if a.here and not any((c / ".git").exists() for c in (repo, *repo.parents)):
-        raise SystemExit("semipilot: not inside a git repository")
+    if a.here:
+        git_root(repo)  # exits when not inside a git repository
     d, report = init(repo, force=a.force)
     say(f"semipilot init → {repo.name} (detected: {d.stack})")
     for action, path in report:
@@ -62,7 +71,8 @@ def cmd_init(a) -> int:
     say("  1. Open .semipilot/config.yaml and confirm the `checks` commands are right for this repo.")
     say("  2. Fill in .github/copilot-instructions.md (one page: commands, conventions, architecture).")
     say("  3. In VS Code Copilot chat:  /refine-requirements <your idea>   then   /spec-critic   → reply `approve`")
-    say("  4. In a terminal:            semipilot run <feature>        (or `semipilot preflight` first, `run` later)")
+    say("  4. In a terminal, on your base branch (usually main):  semipilot run <feature>   — it creates feat/<feature> from there")
+    say("                               (`semipilot preflight <feature>` first does the checks and the planner's questions only)")
     say("Run `semipilot doctor` any time to check the setup.")
     return 0
 
@@ -79,7 +89,11 @@ def cmd_doctor(a) -> int:
         say(f"  [{'ok' if good else '!!'}] {label}" + (f" — {hint}" if (hint and not good) else ""))
 
     say(f"semipilot doctor → {repo.name}")
-    check("git repository", True)
+    prefix = Git(repo).prefix
+    if prefix:
+        check(f"project {prefix} inside repository {git_root(repo).name} (.semipilot, .github and the knowledge layer are looked up here)", True)
+    else:
+        check("git repository (project = repository root)", True)
     check(".semipilot/config.yaml", lay.config.exists(), "run `semipilot init`")
     check("/refine-requirements and /spec-critic prompts", (repo / ".github/prompts/refine-requirements.prompt.md").exists() and (repo / ".github/prompts/spec-critic.prompt.md").exists(), "run `semipilot init`")
     check("@refiner and @spec-critic agents", (repo / ".github/agents/refiner.agent.md").exists() and (repo / ".github/agents/spec-critic.agent.md").exists(), "run `semipilot init`")
@@ -169,10 +183,12 @@ def resolve_feature(lay: Layout, given: str | None) -> str:
 def cmd_run(a) -> int:
     repo = find_repo(a.repo)
     cfg = load_config(repo)
+    if getattr(a, "branch", None):
+        cfg["git"]["branch"] = a.branch
     loop = Loop(repo, cfg, a.feature)
     preflight_only = getattr(a, "preflight_only", False)
     try:
-        reason = loop.run(skip_questions=a.no_questions, preflight_only=preflight_only)
+        reason = loop.run(skip_questions=a.no_questions, preflight_only=preflight_only, stack=getattr(a, "stack", False))
     except NeedsAnswers as q:
         say()
         say(f"The planner has {q.count} question(s) before it can start:")
@@ -263,9 +279,14 @@ def main(argv=None) -> int:
     p.add_argument("--no-questions", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_run, preflight_only=True)
 
-    p = sub.add_parser("run", aliases=["pilotinloop"], help="PilotInLoop: run the loop for approved requirements")
+    p = sub.add_parser("run", aliases=["pilotinloop"], help="PilotInLoop: run the loop for approved requirements — on a new branch created from the branch you are on",
+                       description="Runs the loop on a NEW branch (default `feat/<feature>`, pattern `git.branch` in .semipilot/config.yaml), "
+                                   "created from the branch that is checked out when you start. Check out the base branch first (usually main); "
+                                   "the branch of an earlier run is refused unless --stack.")
     p.add_argument("feature")
     p.add_argument("--no-questions", action="store_true", help="skip the planner's questions (assumptions get logged instead)")
+    p.add_argument("--branch", help="name of the branch to create (overrides `git.branch` for this run)")
+    p.add_argument("--stack", action="store_true", help="allow starting from the branch of an earlier run (build this feature on top of that one)")
     p.set_defaults(fn=cmd_run, preflight_only=False)
 
     p = sub.add_parser("status", help="where every feature stands")

@@ -14,7 +14,7 @@ the first gate against wasted work. This is the human's main input into the pipe
 
 - Feature folder: `.semipilot/features/<slug>/` — `<slug>` is lowercase-kebab, derived from the idea
   (e.g. "export orders as CSV" → `export-orders-csv`). Propose the slug; let Dev change it.
-- Output: `.semipilot/features/<slug>/requirements.md`. Nothing else. Frontmatter `status: draft`.
+- Output: `.semipilot/features/<slug>/requirements.md`. Nothing else. Frontmatter `status: draft` and `type:` (feat unless the request is clearly a fix/chore/refactor/docs).
   (If this repo still uses the manual pipeline's single `.github/requirements/requirements.md`, write there instead.)
 
 ## Inputs
@@ -55,6 +55,7 @@ the first gate against wasted work. This is the human's main input into the pipe
 ```markdown
 ---
 feature: <slug>
+type: feat            # conventional type of the change: feat | fix | chore | refactor | docs — names the branch
 status: draft
 ---
 # Requirement: <short title>

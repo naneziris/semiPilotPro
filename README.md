@@ -77,7 +77,7 @@ everything below uses it — see *With the knowledge layer*.
 | `/refine-requirements export orders as CSV` | Copilot chat | `@refiner`: confirms tags (knowledge layer) or explores the code, asks at most five questions, writes `requirements.md` — problem, scope, impact analysis, acceptance criteria each tagged with the check that proves it (`[check: test_csv_has_header]`), assumptions, open questions. |
 | `/spec-critic` | Copilot chat | Gate 1. Reviews coverage, testability, feasibility, edge cases, size. `APPROVED` or `REJECTED` with the required fix. On APPROVED you reply **approve** and it records `status: approved` — the one human gate before the loop. |
 | `semipilot preflight export-orders-csv` | terminal | Checks (approved requirements, tags, clean tree, knowledge layer healthy, Copilot answers) and the planner's questions → `open-questions.md`. Answer them inline; run it again until it says *Ready*. |
-| `semipilot run export-orders-csv` | terminal | PilotInLoop. Also does the preflight, so on a small feature you can skip `preflight`. |
+| `semipilot run export-orders-csv` | terminal, **on your base branch** | PilotInLoop. Creates `feat/export-orders-csv` from the branch you are on (check out `main` first; the branch of an earlier run is refused unless `--stack`). The name follows `git.branch` in `.semipilot/config.yaml` — `{type}/{feature}` by default, `{type}` from the spec's frontmatter — so set it to your repository's convention. Also does the preflight, so on a small feature you can skip `preflight`. |
 | `semipilot review export-orders-csv` | terminal | The report: assumptions the loop made (read these first), blocked tasks, what got done, check results, a PR draft. |
 
 Then act:
@@ -88,7 +88,7 @@ semipilot resume export-orders-csv        # continue after fixing the requiremen
 semipilot status                          # where every feature stands
 ```
 
-The loop works on a branch `semipilot/<feature>-<date>` and never pushes. Review the diff, run `@scribe` if you have
+The loop works on its own branch (`feat/<feature>` by default) and never pushes. Review the diff, run `@scribe` if you have
 the knowledge layer, open the PR yourself. Keep the machine awake for the run (`caffeinate -i semipilot run …` on
 a Mac, or a server / dev container).
 
@@ -106,7 +106,9 @@ a Mac, or a server / dev container).
    decisions log. After each attempt the orchestrator — not the agent — checks the test lock, the scope, the diff
    size, and runs your `checks`. Failure: retry with the failed diff still in the tree and the errors in the prompt.
    Same error twice: stop, mark the task blocked, move on.
-5. **Report.** Full suite once at the end, then `report.md` and a state commit. Wherever the requirements were
+5. **Report.** Full suite once at the end, then `report.md` and a state commit. The branch holds one
+   conventional commit per task (`feat(<feature>): <task>`, `test(<feature>): …`), no bot marker; squash or
+   merge them the way your team does. Wherever the requirements were
    silent the loop chose the most reversible option and wrote it to `decisions.md`, or stopped with
    `BLOCKED: <question>`.
 
