@@ -384,3 +384,47 @@ def test_legacy_github_requirements_layout_is_used_as_is(h):
     assert reason == "completed"
     assert (legacy / "report.md").exists() and (legacy / "implementation-progress.json").exists()
     assert not h.feat.exists()
+
+
+# ------------------------------------------------------------------ project in a subfolder of the repo
+def test_project_in_subfolder_of_monorepo(h_sub):
+    h = h_sub
+    assert h.repo != h.git_root
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed"
+    assert [t["status"] for t in h.progress()["tasks"]] == ["done", "done"]
+    assert o.git.prefix == "apps/api/"
+    log = h.log()
+    assert "[semipilot] T1: add function" in log and "[semipilot] tests: locked acceptance tests" in log
+    assert h.git("status", "--porcelain").strip() == ""
+    # everything landed under the project, nothing at the git root
+    assert (h.repo / "calc" / "add.py").exists() and not (h.git_root / "calc").exists()
+    assert (h.feat / "plan.json").exists()
+    # the sibling app is untouched
+    assert (h.git_root / "apps" / "web" / "index.js").read_text() == "// sibling app\n"
+    # git paths are project-relative in the state (used for locked-test checks and rollbacks)
+    assert h.task("T1")["diff"]["files"] >= 1
+    assert all(not f.startswith("apps/") for f in o.git.changed_files("HEAD~1") + [t for t in o.git.status_paths()])
+
+
+def test_subfolder_rollback_restores_project_relative_paths(h_sub):
+    """A locked-test violation is reverted via `git cat-file`/`checkout` with the project prefix."""
+    h = h_sub
+    h.scenario(implementer_t1=[
+        step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK), write("tests/test_calc.py", "# tampered\n")]),
+        step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)]),
+    ])
+    o, reason = h.run()
+    assert reason == "completed"
+    assert (h.repo / "tests" / "test_calc.py").read_text() == TEST_FILE_GOOD
+    assert h.task("T1")["attempts"] == 2
+
+
+def test_subfolder_dirty_sibling_blocks_the_run(h_sub):
+    """The clean-tree check is repo-wide on purpose: rollbacks use `git reset --hard`, which cannot be scoped."""
+    h = h_sub
+    (h.git_root / "apps" / "web" / "index.js").write_text("// edited, uncommitted\n")
+    h.scenario()
+    with pytest.raises(orch.PreflightError, match="dirty"):
+        h.run()

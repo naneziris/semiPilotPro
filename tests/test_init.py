@@ -74,3 +74,23 @@ def test_cli_init_and_status(tmp_path, capsys):
     main(["--repo", str(repo), "status"])
     assert "requirements approved" in capsys.readouterr().out
     assert main(["--repo", str(repo), "doctor", "--offline"]) in (0, 1)
+
+
+def test_init_here_and_root_discovery_in_a_subfolder(tmp_path, capsys, monkeypatch):
+    from semipilot.cli import find_repo
+    repo = mkrepo(tmp_path, {"apps/web/index.js": "", "apps/api/package.json": json.dumps({"scripts": {"test": "vitest"}, "devDependencies": {"vitest": "1"}})})
+    api = repo / "apps" / "api"
+    # before init: the git root is the only root there is
+    assert find_repo(api) == repo
+    monkeypatch.chdir(api)
+    assert main(["init", "--here"]) == 0
+    out = capsys.readouterr().out
+    assert "semipilot init → api" in out
+    assert (api / ".semipilot" / "config.yaml").exists() and (api / ".github" / "agents" / "refiner.agent.md").exists()
+    assert not (repo / ".semipilot").exists() and not (repo / ".github").exists()
+    # after init: found from anywhere inside the project, and the git root is still not it
+    (api / "src").mkdir()
+    assert find_repo(api / "src") == api
+    assert find_repo(repo / "apps" / "web") == repo
+    monkeypatch.chdir(api / "src")
+    assert main(["status"]) == 0

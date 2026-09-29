@@ -66,9 +66,11 @@ def write(path, content):
 
 
 class Harness:
-    def __init__(self, tmp_path: Path):
-        self.repo = tmp_path / "repo"
-        self.repo.mkdir()
+    def __init__(self, tmp_path: Path, subdir: str = ""):
+        # subdir="apps/api": the project is a subfolder of the git repository (monorepo layout)
+        self.git_root = tmp_path / "repo"
+        self.repo = self.git_root / subdir if subdir else self.git_root
+        self.repo.mkdir(parents=True)
         self.state = tmp_path / "state"
         self.scenario_path = tmp_path / "scenario.json"
         self.calls_path = tmp_path / "calls.jsonl"
@@ -81,7 +83,7 @@ class Harness:
         self.feat.mkdir(parents=True)
         (self.feat / "requirements.md").write_text(SPEC)
         (self.repo / ".semipilot" / ".gitignore").write_text("runs/\nlast-run\n")
-        (self.repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+        (self.git_root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
         self._git("add", "-A")
         self._git("commit", "-q", "-m", "init")
         self.cfg = load_config(self.repo)
@@ -96,7 +98,7 @@ class Harness:
         self.sleeps = []
 
     def _git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, capture_output=True, text=True, check=True).stdout
+        return subprocess.run(["git", *a], cwd=self.git_root, capture_output=True, text=True, check=True).stdout
 
     def git(self, *a):
         return self._git(*a)
@@ -158,3 +160,14 @@ class Harness:
 @pytest.fixture
 def h(tmp_path):
     return Harness(tmp_path)
+
+
+@pytest.fixture
+def h_sub(tmp_path):
+    """Same, with the project in apps/api/ of a monorepo whose git root has a sibling app."""
+    hs = Harness(tmp_path, subdir="apps/api")
+    (hs.git_root / "apps" / "web").mkdir(parents=True)
+    (hs.git_root / "apps" / "web" / "index.js").write_text("// sibling app\n")
+    hs._git("add", "-A")
+    hs._git("commit", "-q", "-m", "sibling app")
+    return hs

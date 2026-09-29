@@ -41,6 +41,19 @@ the plan schema and a bundled PyYAML in `_vendor/`), put it somewhere on the pat
 Without `jsonschema` (or with the 3.x version some OSes ship) the plan is validated by shape only; `pip`/`pipx`
 installs get the full JSON-schema check.
 
+### Project in a subfolder of a bigger repository
+
+When the project (and its knowledge layer) lives in a subfolder of a monorepo, set it up from inside that folder
+with `semipilot init --here`. Every later command finds the project from anywhere inside it — `.semipilot/`,
+`.github/agents` and `docs/cards` are all relative to that folder, and the Copilot CLI runs there — while
+branches and commits still go to the repository. The clean-tree check before a run is repository-wide on
+purpose: rollbacks use `git reset --hard`, so commit or stash sibling work first.
+
+```bash
+cd my-monorepo/apps/api
+semipilot init --here
+```
+
 ## Use
 
 **Once per repository**

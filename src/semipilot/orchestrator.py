@@ -57,8 +57,29 @@ def state_dir(cfg: dict, repo: Path, run_id: str) -> Path:
 
 # =============================================================================== git
 class Git:
+    """git, run from the project root. The project may be a subfolder of the repository (monorepo):
+    every path in and out of this class is relative to the project, never to the git root."""
+
     def __init__(self, repo: Path):
         self.repo = Path(repo)
+        self._prefix: Optional[str] = None
+
+    @property
+    def prefix(self) -> str:
+        """Path of the project inside the repository ("" when they coincide, else e.g. "apps/api/")."""
+        if self._prefix is None:
+            self._prefix = self.run("rev-parse", "--show-prefix").strip()
+        return self._prefix
+
+    def status_paths(self) -> list[str]:
+        """Uncommitted paths (whole repository), relative to the project: `../x` for anything outside it."""
+        out = []
+        for l in self.run("status", "--porcelain").splitlines():
+            if not l.strip():
+                continue
+            path = l[3:].split(" -> ")[-1]
+            out.append(path[len(self.prefix):] if path.startswith(self.prefix) else os.path.relpath(path, self.prefix or "."))
+        return out
 
     def run(self, *args: str, check: bool = True) -> str:
         r = subprocess.run(["git", *args], cwd=self.repo, capture_output=True, text=True)
@@ -86,17 +107,17 @@ class Git:
         self.run("checkout", "-q", name)
 
     def changed_files(self, base: str) -> list[str]:
-        tracked = self.run("diff", "--name-only", base).splitlines()
+        tracked = self.run("diff", "--name-only", "--relative", base).splitlines()
         untracked = self.run("ls-files", "--others", "--exclude-standard").splitlines()
         return sorted(set(f for f in tracked + untracked if f))
 
     def diff_lines(self, base: str, paths: Optional[list[str]] = None, exclude: Optional[list[str]] = None) -> tuple[int, int]:
-        self.run("add", "-N", "--all")
-        args = ["diff", "--numstat", base]
+        self.run("add", "-N", "--", ".")
+        args = ["diff", "--numstat", "--relative", base]
         if paths or exclude:
             args += ["--", *(paths or ["."]), *[f":(exclude){e.rstrip('/')}" for e in (exclude or [])]]
         out = self.run(*args)
-        self.run("reset", "-q")
+        self.run("reset", "-q", "--", ".")
         add = rem = 0
         for line in out.splitlines():
             parts = line.split("\t")
@@ -126,7 +147,7 @@ class Git:
 
     def restore_paths(self, sha: str, paths: list[str]) -> None:
         for p in paths:
-            if subprocess.run(["git", "cat-file", "-e", f"{sha}:{p}"], cwd=self.repo, capture_output=True).returncode == 0:
+            if subprocess.run(["git", "cat-file", "-e", f"{sha}:{self.prefix}{p}"], cwd=self.repo, capture_output=True).returncode == 0:
                 self.run("checkout", sha, "--", p)
             else:
                 (self.repo / p).unlink(missing_ok=True)
@@ -149,7 +170,7 @@ class Git:
         return True
 
     def stat_between(self, a: str, b: str) -> dict:
-        out = self.run("diff", "--numstat", a, b)
+        out = self.run("diff", "--numstat", "--relative", a, b)
         files, add, rem = 0, 0, 0
         for line in out.splitlines():
             parts = line.split("\t")
@@ -596,7 +617,7 @@ class Loop:
         """If the only uncommitted files are this feature's own Markdown (spec, answers), commit them —
         that is the human's gate work, and asking them to git-add it is a papercut."""
         feat_rel = self.lay.rel(self.lay.feature_dir(self.feature)) + "/"
-        dirty = [l[3:] for l in self.git.run("status", "--porcelain").splitlines() if l.strip()]
+        dirty = self.git.status_paths()
         if dirty and all(f.startswith(feat_rel) or f.startswith(self.lay.rel(self.lay.root) + "/.gitignore") for f in dirty):
             self.git.run("add", "-A", "--", feat_rel, self.lay.rel(self.lay.root / ".gitignore"))
             self.git.run("commit", "-q", "-m", f"{self.cfg['git']['commit_prefix']} {self.feature}: {what}")

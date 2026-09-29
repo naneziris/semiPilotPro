@@ -23,12 +23,17 @@ from pathlib import Path
 from ._yaml import yaml
 
 from . import __version__
-from .config import Layout, knowledge_layer_present, load_config
+from .config import CONFIG_FILE, SEMIPILOT_DIR, Layout, knowledge_layer_present, load_config
 from .orchestrator import Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter, parse_questions
 
 
 def find_repo(start: Path) -> Path:
+    """The project root: the nearest ancestor with `.semipilot/config.yaml` (a project set up with
+    `semipilot init --here` inside a bigger repository), else the git root."""
     p = Path(start).resolve()
+    for cand in (p, *p.parents):
+        if (cand / SEMIPILOT_DIR / CONFIG_FILE).exists():
+            return cand
     for cand in (p, *p.parents):
         if (cand / ".git").exists():
             return cand
@@ -43,7 +48,9 @@ def say(msg: str = "") -> None:
 def cmd_init(a) -> int:
     from .initcmd import init
 
-    repo = find_repo(a.repo)
+    repo = Path(a.repo).resolve() if a.here else find_repo(a.repo)
+    if a.here and not any((c / ".git").exists() for c in (repo, *repo.parents)):
+        raise SystemExit("semipilot: not inside a git repository")
     d, report = init(repo, force=a.force)
     say(f"semipilot init → {repo.name} (detected: {d.stack})")
     for action, path in report:
@@ -244,6 +251,7 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("init", help="make this repo ready: config, /refine-requirements and /spec-critic prompts, agents")
     p.add_argument("--force", action="store_true", help="overwrite semipilot's own files (never your instructions)")
+    p.add_argument("--here", action="store_true", help="set up the current directory as the project (for a project that lives in a subfolder of a bigger repository); later commands find it from anywhere inside")
     p.set_defaults(fn=cmd_init)
 
     p = sub.add_parser("doctor", help="check Copilot CLI, config and checks")

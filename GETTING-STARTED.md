@@ -41,6 +41,7 @@ Install the tool once (Python ≥ 3.9, git, the GitHub Copilot CLI logged in):
 pipx install git+https://github.com/naneziris/semiPilotPro.git@v4
 cd /path/to/your-repo
 semipilot init          # detects your stack and the knowledge layer; installs /refine-requirements, /spec-critic and the agents
+                        # (project in a subfolder of a monorepo? cd there and use `semipilot init --here`)
 semipilot doctor        # confirm the checks in .semipilot/config.yaml and that Copilot answers
 ```
 
