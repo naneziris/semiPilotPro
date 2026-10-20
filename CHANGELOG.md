@@ -56,6 +56,8 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
 - `resume` continues at the stage that stopped (planning, locked tests or tasks) and gives blocked tasks a fresh set
   of attempts; before, a halt during planning or test-writing could not be resumed and blocked tasks never retried.
 - A run whose tasks end blocked reports `completed_with_blocked` (exit 2) instead of `completed`.
+- An acceptance criterion wrapped over several indented lines keeps its `[check: …]` tag (preflight used to read
+  only a criterion's first line and reject it as untagged).
 - YAML comments in `requirements.md` frontmatter no longer break approval and branch names.
 - The loop's commits and reverts skip git hooks (`--no-verify`), so a project hook cannot crash a run.
 - A tree reset never touches another branch: if an agent switched branches, the loop switches back and halts.

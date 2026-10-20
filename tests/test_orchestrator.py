@@ -725,3 +725,27 @@ def test_models_per_role_and_cost_by_role(h):
     if h.harness == "claude":
         by_role = h.progress()["budget"]["cost_by_role"]
         assert round(by_role["implementer"], 2) == 0.02 and "by role:" in h.report()
+
+
+def test_wrapped_criteria_keep_their_check_tag():
+    spec = """## Acceptance Criteria
+1. One line. [check: a]
+2. A criterion that wraps,
+   onto a second line. [check: b]
+3. A criterion whose tag is alone on the next line.
+   [check: c]
+- A bullet criterion
+  that wraps. [check: d]
+4. Untagged, and wrapped
+   with no tag at all.
+5. Untagged.
+
+Not indented, so not part of 5. [check: e]
+
+## Assumptions
+- Not a criterion. [check: f]
+"""
+    crit, untagged = orch.parse_acceptance_criteria(spec, r"\[check:\s*(?P<ref>[^\]]+)\]")
+    assert [c["ref"] for c in crit] == ["a", "b", "c", "d"]
+    assert crit[1]["text"] == "A criterion that wraps, onto a second line."
+    assert untagged == ["Untagged, and wrapped with no tag at all.", "Untagged."]

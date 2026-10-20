@@ -285,16 +285,28 @@ def parse_frontmatter(text: str) -> dict:
 def parse_acceptance_criteria(text: str, tag_regex: str) -> tuple[list[dict], list[str]]:
     """Criteria live under a heading containing 'acceptance'. Each must carry `[check: <ref>]`."""
     tag = re.compile(tag_regex, re.IGNORECASE)
-    criteria, untagged = [], []
+    item = re.compile(r"^([-*]|\d+[.)])\s+")
+    bodies: list[str] = []
     in_section = False
+    current: Optional[list] = None  # lines of the list item being read; wrapped lines are joined to it
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("#"):
             in_section = "acceptance" in line.lower()
+            current = None
             continue
-        if not in_section or not re.match(r"^([-*]|\d+[.)])\s+", line):
+        if not in_section:
             continue
-        body = re.sub(r"^([-*]|\d+[.)])\s+", "", line)
+        if item.match(line):
+            current = [item.sub("", line)]
+            bodies.append(current)
+        elif line and current is not None and raw[:1] in (" ", "\t"):
+            current.append(line)  # an indented continuation of the previous criterion
+        else:
+            current = None
+    criteria, untagged = [], []
+    for parts in bodies:
+        body = " ".join(parts)
         m = tag.search(body)
         if m:
             criteria.append({"text": tag.sub("", body).strip(), "ref": m.group("ref").strip()})
