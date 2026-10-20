@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -517,9 +518,11 @@ class Loop:
 
     def make_runner(self) -> Runner:
         carried = self.runner.cost_usd if self.runner else 0.0  # preflight calls count toward the run's cost
+        carried_roles = dict(self.runner.cost_by_role) if self.runner else {}
         self.runner = Runner(self.cfg, self.run_dir(), sleep_fn=self.sleep, cwd=self.repo,
                              reset_tree_fn=lambda: self.reset_tree("infra failure"))
         self.runner.cost_usd = carried
+        self.runner.cost_by_role = carried_roles
         return self.runner
 
     def instructions(self) -> tuple[str, str]:
@@ -572,6 +575,10 @@ class Loop:
             if self.runner.cost_usd:
                 before = float(self.progress.budget.get("cost_usd_before_resume", 0))
                 self.progress.budget["cost_usd"] = round(before + self.runner.cost_usd, 4)
+                by_role = dict(self.progress.budget.get("cost_by_role_before_resume") or {})
+                for role, usd in self.runner.cost_by_role.items():
+                    by_role[role] = round(by_role.get(role, 0) + usd, 4)
+                self.progress.budget["cost_by_role"] = by_role
         self.progress.test_lock = self.lock.to_json()
         self.progress.save(self.progress_path)
         self.lay.last_run.write_text(self.feature + "\n", encoding="utf-8")
@@ -775,11 +782,12 @@ class Loop:
         self.log(f"base: {base} @ {self.git.head()[:10]} → the run will create {self.branch_name()} from here")
 
     def check_agent(self) -> None:
+        """Free checks only: the agent CLI is installed (and the optional auth/expiry checks). No model call — the
+        planner's questions call right after is the first real call, and a login problem there halts cleanly before
+        any branch exists (with --no-questions, `resume` after logging in continues at planning)."""
         h = self.runner.harness
-        res = self.runner.invoke("health", self.cfg["preflight"]["health_prompt"], "health")
-        if res.kind != OK:
-            raise PreflightError(f"{h.label} health check failed ({res.kind}, exit {res.exit_code}). "
-                                 f"Logged in? ({h.login_hint})\n{res.combined.strip()[-1500:]}")
+        if shutil.which(h.executable[0]) is None:
+            raise PreflightError(f"{h.label} not found ({h.executable[0]}): {h.install_hint}")
         pf = self.cfg["preflight"]
         if pf.get("auth_check_cmd"):
             r = subprocess.run(pf["auth_check_cmd"], shell=True, cwd=self.repo, capture_output=True, text=True)
@@ -823,7 +831,7 @@ class Loop:
                                  started_at=self.now().isoformat(), base_commit=self.git.head())
         self.make_runner()
         self.check_agent()
-        self.log(f"{self.runner.harness.label} OK")
+        self.log(f"{self.runner.harness.label} installed ({self.runner.harness.executable[0]})")
 
         if not skip_questions:
             if self.questions_path.exists():
@@ -890,6 +898,7 @@ class Loop:
             self.git.checkout(self.progress.branch)
         self.progress.budget["elapsed_min_before_resume"] = self.progress.budget.get("elapsed_min", 0)
         self.progress.budget["cost_usd_before_resume"] = self.progress.budget.get("cost_usd", 0)
+        self.progress.budget["cost_by_role_before_resume"] = dict(self.progress.budget.get("cost_by_role") or {})
         self.t_start = time.monotonic()  # an automatic resume after a retry window must not count the sleep
         self.progress.stop_reason = None
         self.lock.from_json(self.progress.test_lock)
@@ -1300,6 +1309,8 @@ class Loop:
               f"- Wall-clock: {b.get('elapsed_min', 0)} min / {self.cfg['budget']['wall_clock_seconds'] // 60} min"]
         if b.get("cost_usd"):
             L += [f"- Cost reported by the harness: ${b['cost_usd']:.2f} (all loop calls)"]
+            if b.get("cost_by_role"):
+                L += ["  - by role: " + ", ".join(f"{r} ${v:.2f}" for r, v in sorted(b["cost_by_role"].items(), key=lambda x: -x[1]))]
         i = p.infra or {}
         L += ["", "## 7. Infrastructure", f"- Harness: {i.get('harness', '?')}",
               f"- Transient agent failures: {i.get('transient_failures', 0)}",

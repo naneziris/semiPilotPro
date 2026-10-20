@@ -13,6 +13,17 @@ runner:
   forbidden_flags: []            # extra flags to refuse (each harness already refuses resume/session/bypass flags)
   extra_flags: []                # appended to every call, after the harness's own flags
 
+# Model per loop role; null = runner.model (and that null = the CLI's default). Planner and critics decide what gets
+# built — give them your strongest model. The implementer works against locked tests and your checks, so a cheaper
+# model there is the usual first saving; measure with the report's "by role" cost line before and after.
+models:
+  planner: null
+  spec-critic: null
+  plan-critic: null
+  test-writer: null
+  test-fixer: null
+  implementer: null
+
 # Permission profile per loop role. read = can read and search the repository, cannot edit or run anything but
 # read-only git. write = can edit files and run commands (tests), minus the harness deny-list. none = no tools.
 roles:
@@ -131,6 +142,10 @@ harnesses:
     # --setting-sources: "" loads none of the user/project/local settings files, so an `allow` rule in a repository's
     # .claude/settings.json cannot widen a profile. null = Claude Code's default (all sources).
     setting_sources: ""
+    # --bare: skip hooks, plugins, MCP servers and memory files at startup, so every call starts with less context.
+    # Requires an API key (ANTHROPIC_API_KEY); bare mode never uses a Claude subscription login. The loop's prompts
+    # name the instructions files explicitly, so agents still read AGENTS.md.
+    bare: false
     max_turns: {}                  # e.g. {write: 60} — per-profile turn cap (`--max-turns`); empty = CLI default
     max_budget_usd_per_call: null  # e.g. 2.5 — `--max-budget-usd` on every call; the run's report sums the cost
     failure_patterns:

@@ -85,7 +85,7 @@ orchestrator resolves the tags itself and puts the reading list in the prompt, s
 3. **Skills folder** in `skills_pack.SKILL_DIRS` (Codex reads `.agents/skills/`, which Copilot already uses).
 4. **Tests:** add the dialect to `tests/fake_agent.py`, the name to `HARNESSES` and its real error strings to
    `ERRORS` in `tests/conftest.py`. The whole orchestrator suite then runs against it.
-5. **Verify for real**: flags against `--help`, one health call, one write-profile call that must be denied
+5. **Verify for real**: flags against `--help`, one `doctor --live` call, one write-profile call that must be denied
    `git push`, one read-profile call that must be denied a write. Record the result in
    [harnesses.md](harnesses.md#what-has-been-verified).
 

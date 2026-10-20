@@ -77,6 +77,10 @@ class Harness:
         extra = self.cfg.get("failure_patterns") or {}
         return {k: list(own.get(k) or []) + list(extra.get(k) or []) for k in set(own) | set(extra)}
 
+    def model_for(self, role: str) -> str:
+        """`models.<role>` if set, else `runner.model`, else '' (the CLI's default)."""
+        return str((self.cfg.get("models") or {}).get(role) or self.rcfg.get("model") or "")
+
     def forbidden(self) -> set:
         return set(self.hard_forbidden) | set(self.rcfg.get("forbidden_flags") or []) | set(self.hcfg.get("forbidden_flags") or [])
 
@@ -129,8 +133,8 @@ class CopilotHarness(Harness):
 
     def _command(self, role, profile, prompt, log_dir):
         argv = self.executable + ["-p", prompt, "-s", "--no-ask-user"]
-        if self.rcfg.get("model"):
-            argv += ["--model", str(self.rcfg["model"])]
+        if self.model_for(role):
+            argv += ["--model", self.model_for(role)]
         argv += [f"--allow-tool={t}" for t in self.allow(profile)]
         argv += [f"--deny-tool={t}" for t in self.deny()]
         argv += ["--log-dir", str(log_dir)]
@@ -154,8 +158,10 @@ class ClaudeCodeHarness(Harness):
         if mode == "bypassPermissions":
             raise ForbiddenFlagError("permission_mode bypassPermissions would disable the deny rules; not allowed")
         argv = self.executable + ["-p", "--output-format", "json", "--no-session-persistence", "--permission-mode", mode]
-        if self.rcfg.get("model"):
-            argv += ["--model", str(self.rcfg["model"])]
+        if self.hcfg.get("bare"):  # smaller startup context per call; needs ANTHROPIC_API_KEY (no subscription login)
+            argv += ["--bare"]
+        if self.model_for(role):
+            argv += ["--model", self.model_for(role)]
         max_turns = (self.hcfg.get("max_turns") or {}).get(profile)
         if max_turns:
             argv += ["--max-turns", str(max_turns)]

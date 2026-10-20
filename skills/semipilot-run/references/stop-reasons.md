@@ -19,4 +19,5 @@ tasks a fresh set of attempts and continues at whatever stage stopped — planni
 
 A `preflight` that cannot start (exit 1) prints its reason directly: unapproved or missing spec, untagged acceptance
 criteria, dirty working tree, existing run branch, starting from another run's branch (use `--stack` to build on
-it), unhealthy knowledge layer or unknown tags, `checks` still TODO, or an agent CLI that does not answer.
+it), unhealthy knowledge layer or unknown tags, `checks` still TODO, or an agent CLI that is not installed. A login problem
+shows up as `auth_failure` on the planner's questions call, before any branch exists.

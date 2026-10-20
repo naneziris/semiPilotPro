@@ -47,9 +47,14 @@ task's locked test files plus the files of tasks already done. A `cmd` starting 
 | `forbidden_flags` | `[]` | extra flags to refuse (session and permission-bypass flags are always refused) |
 | `extra_flags` | `[]` | appended to every call |
 
+### `models`
+A model per loop role (`planner`, `spec-critic`, `plan-critic`, `test-writer`, `test-fixer`, `implementer`); `null`
+falls back to `runner.model`, and that to the CLI's default. Typical use: keep the strongest model on planner and
+critics, try a cheaper one on the implementer, compare the report's cost by role and its retries before and after.
+
 ### `roles`
 The permission profile for each loop role: `read`, `write` or `none`. Defaults: planner/spec-critic/plan-critic
-`read`, test-writer/test-fixer/implementer `write`, health `none`.
+`read`, test-writer/test-fixer/implementer `write`, health (`doctor --live`) `none`.
 
 ### `harnesses.<name>`
 Everything harness-specific. `semipilot config` shows the full defaults.
@@ -64,6 +69,7 @@ Everything harness-specific. `semipilot config` shows the full defaults.
 | `permission_mode.<profile>` | claude | default `dontAsk`; `bypassPermissions` is refused |
 | `max_turns.<profile>` | claude | `--max-turns` per profile (empty = CLI default) |
 | `max_budget_usd_per_call` | claude | `--max-budget-usd` on every call |
+| `bare` | claude | default `false`; `true` passes `--bare` — less startup context per call, but needs `ANTHROPIC_API_KEY` (no subscription login) |
 | `setting_sources` | claude | default `""`: `--setting-sources ""` loads no user/project/local settings file, so an `allow` rule there cannot widen a profile; `null` = Claude Code's default |
 
 ### `failure_patterns`
@@ -116,7 +122,7 @@ by `doctor` and the plan critic.
 ### `preflight`
 | Key | Default | |
 |---|---|---|
-| `health_prompt` | "Reply with exactly the word OK…" | the doctor/preflight call |
+| `health_prompt` | "Reply with exactly the word OK…" | the one call `doctor --live` makes (preflight makes none) |
 | `auth_check_cmd` | null | e.g. `gh auth status` |
 | `token_expiry_env` | `SEMIPILOT_TOKEN_EXPIRES_AT` | ISO timestamp; preflight refuses when it expires before the wall-clock budget ends (`COPILOT_TOKEN_EXPIRES_AT` still read) |
 | `criterion_tag_regex` | `\[check:\s*(?P<ref>[^\]]+)\]` | the acceptance-criterion tag |

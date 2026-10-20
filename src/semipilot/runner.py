@@ -160,6 +160,7 @@ class Runner:
         )
         self.calls: list = []
         self.cost_usd: float = 0.0
+        self.cost_by_role: dict = {}
         self._unknown_seen: set = set()
 
     # ------------------------------------------------------------------ command
@@ -197,6 +198,7 @@ class Runner:
         cost = meta.get("total_cost_usd")
         if isinstance(cost, (int, float)):
             self.cost_usd += float(cost)
+            self.cost_by_role[role] = self.cost_by_role.get(role, 0.0) + float(cost)
         self._write_log(log_path, role, prompt, res)
         self.calls.append({"label": attempt_label, "role": role, "kind": res.kind, "exit": code,
                            "duration_s": round(dur, 1), "timed_out": timed_out,

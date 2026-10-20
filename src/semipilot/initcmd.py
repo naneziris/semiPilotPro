@@ -82,6 +82,8 @@ tests:
 
 # runner:
 #   model: null            # pin a model for every loop call, or leave the CLI default
+# models:                  # a model per role (null = runner.model); keep planner/critics strong, measure before
+#   implementer: null      # switching — the report shows cost by role
 # budget:
 #   max_iterations: 30     # implementer calls per run
 #   wall_clock_seconds: 21600

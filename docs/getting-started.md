@@ -66,7 +66,8 @@ skill folder, or to your personal one) so it finds them.
 2. **Fill in `AGENTS.md`** (or your existing `.github/copilot-instructions.md` / `CLAUDE.md`): commands,
    conventions, architecture, invariants — one page. The plan critic rejects every plan while it still holds
    `{{TODO}}` placeholders. When an agent makes the same mistake twice, add a line.
-3. **Check:** `semipilot doctor`. It verifies the config, the harness and that it answers, the skill pack, the
+3. **Check:** `semipilot doctor` (add `--live` once to confirm the agent CLI is logged in; that costs one small
+   call). It verifies the config, that the harness is installed, the skill pack, the
    instructions file, the checks, and the knowledge layer if you have one.
 
 ### Optional: the knowledge layer
@@ -112,7 +113,7 @@ semipilot preflight export-orders-csv
 ```
 
 It checks the spec (approved, every criterion tagged), the working tree (clean, branch name free), the knowledge
-layer, and that the agent CLI answers. Then the planner lists what it would otherwise have to guess in
+layer, and that the agent CLI is installed. Then the planner lists what it would otherwise have to guess in
 `open-questions.md`. Fill in every `Answer:` line — copying the recommended default is fine — and run preflight again
 until it says **Ready**. Five minutes here is the best-leveraged time of the whole run.
 

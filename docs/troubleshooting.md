@@ -5,9 +5,10 @@ prompt, the agent's answer, stdout, stderr, exit code and classification — tha
 
 ## Setup
 
-**"Claude Code / GitHub Copilot CLI health check failed … Logged in?"** — Run the CLI once interactively and log in
-(`claude` → `/login`, or `copilot login`). For Claude Code with an API key, set `ANTHROPIC_API_KEY`. Check
-`semipilot doctor` (without `--offline`).
+**`auth_failure` before the run starts, or `doctor --live` fails** — Run the CLI once interactively and log in
+(`claude` → `/login`, or `copilot login`). For Claude Code with an API key, set `ANTHROPIC_API_KEY`.
+
+**"Claude Code / GitHub Copilot CLI not found"** — Install it, or set `harnesses.<name>.command` to its full path.
 
 **The skills don't show up in chat.** Check the folder for your chat: `.claude/skills/` for Claude Code,
 `.agents/skills/` for Copilot (VS Code chat and CLI). Installed for the other one? `semipilot init --skills both`.
@@ -68,8 +69,8 @@ look at that call's log, then `resume`.
 warning shows the failure; usually a new requirement or a fix by hand.
 
 **Cost is higher than expected (Claude Code).** Each call is a fresh session and pays Claude Code's startup context.
-Lower `budget.max_iterations`, set `harnesses.claude.max_budget_usd_per_call`, pin a cheaper `runner.model` for
-the loop, and keep tasks small.
+The report's cost by role shows where it goes; see [harnesses.md](harnesses.md#cost-and-speed) for what to change, in
+order of effect.
 
 ## Knowledge layer
 

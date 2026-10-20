@@ -110,7 +110,7 @@ src/semipilot/          the CLI and the orchestrator (harness.py = the adapters;
 skills/                 the Agent Skills pack (single source of truth; packaged into the wheel)
 .claude-plugin/         plugin manifests, so the skills can be installed as a plugin (Claude Code and Copilot CLI)
 bin/                    launchers for running from a download (no pip)
-tests/                  238 tests; the orchestrator suite runs once per harness against a fake agent CLI
+tests/                  245 tests; the orchestrator suite runs once per harness against a fake agent CLI
 docs/                   documentation; docs/design/ holds the design records
 ```
 

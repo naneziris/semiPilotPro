@@ -696,3 +696,32 @@ def test_resume_gives_a_blocked_task_fresh_attempts(h):
     assert reason == "completed_with_blocked" and h.task("T1")["status"] == "blocked"
     o, reason = h.resume()
     assert reason == "completed" and h.task("T1")["status"] == "done"
+
+
+# ---------------------------------------------------------------- cost (0.2.0)
+def test_preflight_makes_no_model_call_of_its_own(h):
+    h.scenario()
+    h.run()
+    assert not any("Reply with exactly" in c["prompt"] for c in h.calls())
+    assert len(h.calls()) == 1 + 1 + 2 + 1 + 2  # questions, plan, 2 critics, test-writer, 2 tasks
+
+
+def test_missing_agent_cli_fails_preflight_for_free(h):
+    h.cfg["runner"]["command"] = "definitely-not-installed-agent-xyz"
+    h.scenario()
+    with pytest.raises(orch.PreflightError) as e:
+        h.run()
+    assert "not found" in str(e.value)
+
+
+def test_models_per_role_and_cost_by_role(h):
+    h.cfg["models"]["implementer"] = "cheap-model"
+    h.cfg["runner"]["model"] = "strong-model"
+    h.scenario()
+    h.run()
+    for c in h.calls():
+        model = c["argv"][c["argv"].index("--model") + 1]
+        assert model == ("cheap-model" if "Implement **only task" in c["prompt"] else "strong-model")
+    if h.harness == "claude":
+        by_role = h.progress()["budget"]["cost_by_role"]
+        assert round(by_role["implementer"], 2) == 0.02 and "by role:" in h.report()

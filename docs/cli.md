@@ -6,7 +6,7 @@ the git root. `--repo <path>` (before the command) points it elsewhere.
 | Command | What it does | Exit codes |
 |---|---|---|
 | `semipilot init [--harness copilot\|claude] [--skills copilot,claude\|both] [--here] [--force]` | Config, the skill pack, `AGENTS.md` if you have no instructions file | 0 |
-| `semipilot doctor [--offline]` | Checks config, harness (and that it answers), skills, instructions, checks, knowledge layer | 0 ok · 1 something to fix |
+| `semipilot doctor [--live]` | Checks config, harness installed, skills, instructions, checks, knowledge layer; `--live` adds one small model call to check the login | 0 ok · 1 something to fix |
 | `semipilot preflight <feature>` | All run checks + the planner's questions; no branch is created | 0 ready · 3 questions to answer · 1 cannot start |
 | `semipilot run <feature> [--branch NAME] [--stack] [--no-questions]` | The loop, on a new branch from the current one (alias `pilotinloop`) | 0 completed · 2 stopped (incl. `completed_with_blocked`) · 3 questions · 1 cannot start |
 | `semipilot status` | Every feature's stage and the next command | 0 |
@@ -29,7 +29,8 @@ current. Your `.semipilot/config.yaml` and instructions file are never overwritt
 unapproved or has untagged criteria; the tree is dirty (uncommitted spec and answers in the feature folder are
 committed for you); the run branch exists (`--branch` names another); you are on the branch of an earlier run
 (`--stack` builds on top of it on purpose); `checks` contain a TODO; the knowledge layer is unhealthy or a tag is
-unknown; the agent CLI does not answer. `--no-questions` skips the planner's questions; it logs assumptions instead.
+unknown; the agent CLI is not installed. (A login problem shows up on the first real call — the planner's questions —
+and stops cleanly before any branch exists.) `--no-questions` skips the planner's questions; it logs assumptions instead.
 
 **`rollback`.** Adds `git revert` commits for the task and its dependents (in reverse order) and resets their state.
 It refuses on a dirty tree. A conflicting revert stops with a message; resolve it by hand.

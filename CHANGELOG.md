@@ -25,12 +25,17 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
   tags fail preflight before any agent call.
 - **Branch guard**: an agent that switches branches halts the run (`guardrail_violation`) and is switched back.
 - Project overrides for role definitions: `.semipilot/roles/<role>.md`.
+- **A model per role** (`models:`), and the report's cost broken down by role.
+- Claude Code `bare` option (`--bare`: less startup context per call; API key only).
 - `doctor` checks the harness, the skill pack, the instructions file (AGENTS.md / CLAUDE.md interplay) and lists
   v0.1 leftovers.
 - Documentation set: getting started, concepts, harnesses, skills, knowledge layer, configuration, CLI, architecture,
   troubleshooting, upgrading; SECURITY.md and CONTRIBUTING.md; CI on Linux and macOS, Python 3.9 and 3.12.
 
 ### Changed
+- **No model call for health checks.** Preflight only checks that the agent CLI is installed; the planner's questions
+  call is the first real call and catches a login problem before any branch exists. `doctor` makes a model call only
+  with `--live` (`--offline` is now the default and still accepted).
 - Loop roles are **inlined** into each call instead of loaded with `--agent`; the same prompts run on every harness.
 - `AGENTS.md` is the default instructions file; `init` creates it only when no instructions file exists.
 - The deny list now also covers `git commit`, `git switch`, `git stash`, `git rebase`, `git merge`.

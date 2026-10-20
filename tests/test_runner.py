@@ -286,3 +286,11 @@ def test_claude_telemetry_numbers_never_look_like_http_errors(tmp_path):
                         ({"is_error": True, "api_error_status": 401}, FATAL)]:
         assert classify(CallResult(exit_code=1, stdout="{}", stderr="", duration_s=1, text="", meta=meta2),
                         hz.failure_patterns(), hz) == kind
+
+
+def test_claude_bare_mode_is_opt_in(tmp_path):
+    from semipilot.config import load_config
+    cfg = load_config(tmp_path)
+    assert "--bare" not in get_harness({**cfg, "harness": "claude"}).command("planner", "read", "x", "l").argv
+    cfg["harnesses"]["claude"]["bare"] = True
+    assert "--bare" in get_harness({**cfg, "harness": "claude"}).command("planner", "read", "x", "l").argv

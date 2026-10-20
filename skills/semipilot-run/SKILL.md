@@ -48,7 +48,7 @@ If the user explicitly asks you to start it from here, start it detached with it
 
 1. **Preflight.** Run `semipilot preflight <feature>`. It refuses with a clear reason when something is wrong
    (unapproved spec, untagged criteria, dirty tree, branch exists, knowledge layer unhealthy, agent CLI not
-   logged in) — relay the reason and the fix.
+   installed or not logged in) — relay the reason and the fix.
 2. **Questions.** When it writes `.semipilot/features/<feature>/open-questions.md`, help the user answer each
    `Answer:` line. Never answer for them; you may explain each question and its recommended default. Re-run
    preflight until it prints *Ready*.

@@ -166,7 +166,9 @@ def cmd_doctor(a) -> int:
         exe = harness.executable[0]
         found = shutil.which(exe) is not None
         check(f"{harness.label} on PATH ({exe})", found, harness.install_hint)
-        if found and not a.offline:
+        if found and not a.live:
+            info(f"login not checked — `semipilot doctor --live` makes one small model call to check it")
+        if found and a.live:
             try:
                 inv = harness.health(cfg["preflight"]["health_prompt"], str(lay.runs / "doctor"))
                 kw = {"input": inv.stdin} if inv.stdin is not None else {"stdin": subprocess.DEVNULL}
@@ -358,7 +360,8 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_init)
 
     p = sub.add_parser("doctor", help="check the harness CLI, config, skills, instructions and checks")
-    p.add_argument("--offline", action="store_true", help="skip the call to the agent CLI")
+    p.add_argument("--live", action="store_true", help="also make one small model call to confirm the agent CLI is logged in (costs a call)")
+    p.add_argument("--offline", action="store_true", help=argparse.SUPPRESS)  # the default since 0.2; kept for old scripts
     p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("preflight", help="checks + the planner's questions, without starting the run")
