@@ -1,47 +1,74 @@
-"""`semipilot init` — make a repository ready in one command.
+"""`semipilot init` — make a project ready in one command, for one or both supported harnesses.
 
-Writes (never overwrites):
-    .semipilot/config.yaml                    the one file the user edits (checks + test patterns, detected)
-    .semipilot/.gitignore                     keeps run logs out of git
-    .github/prompts/refine-requirements.prompt.md   /refine-requirements in Copilot chat (@refiner)
-    .github/prompts/spec-critic.prompt.md           /spec-critic in Copilot chat (Gate 1 + approval)
-    .github/agents/{refiner,spec-critic,pilotinloop-*}.agent.md   the agents behind the prompts and the loop
-    .github/copilot-instructions.md           one-page repo instructions (only if missing), with detected commands
+Writes (never overwrites your config or your instructions; --force refreshes only the skill folders):
+    .semipilot/config.yaml          the one file you edit: harness, checks, test patterns (detected)
+    .semipilot/.gitignore           keeps run logs out of git
+    <skills folder>/semipilot-*/    the skill pack, where the harness's chat finds it:
+                                      copilot → .agents/skills/   (VS Code Copilot chat + Copilot CLI)
+                                      claude  → .claude/skills/   (Claude Code)
+    AGENTS.md                       one-page instructions every agent reads (only if no instructions file exists)
+    CLAUDE.md                       `@.github/copilot-instructions.md` — only for Claude Code when that is your only
+                                    instructions file (Claude Code reads AGENTS.md or CLAUDE.md, not Copilot's file)
 """
 from __future__ import annotations
 
+import re
 import shutil
-from importlib import resources
 from pathlib import Path
+from typing import Optional
 
 from ._yaml import yaml
-
-from .config import SEMIPILOT_DIR, Layout, knowledge_layer_present
+from .config import SEMIPILOT_DIR, Layout, instructions_file, kb_flavor, knowledge_layer_present
 from .detect import Detected, detect
+from .harness import ALIASES, HARNESSES
+from .skills_pack import SKILL_DIRS, install_skills, template
+
+LEGACY_FILES = {
+    ".github/agents/pilotinloop-planner.agent.md": "PilotInLoop roles are inlined into every call since v0.2",
+    ".github/agents/pilotinloop-spec-critic.agent.md": "PilotInLoop roles are inlined into every call since v0.2",
+    ".github/agents/pilotinloop-plan-critic.agent.md": "PilotInLoop roles are inlined into every call since v0.2",
+    ".github/prompts/refine-requirements.prompt.md": "replaced by the semipilot-refine skill (/semipilot-refine)",
+    ".github/prompts/spec-critic.prompt.md": "replaced by the semipilot-spec-critic skill (/semipilot-spec-critic)",
+    ".github/agents/refiner.agent.md": "replaced by the semipilot-refine skill",
+    ".github/agents/spec-critic.agent.md": "replaced by the semipilot-spec-critic skill",
+}
 
 
-def _asset(*parts: str) -> str:
-    return resources.files("semipilot").joinpath("assets", *parts).read_text(encoding="utf-8")
+def normalize_harness(name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    n = ALIASES.get(name.strip().lower(), name.strip().lower())
+    if n not in HARNESSES:
+        raise SystemExit(f"semipilot: unknown harness {name!r}; supported: {', '.join(sorted(HARNESSES))}")
+    return n
 
 
-def _write(dest: Path, content: str, report: list, force: bool = False) -> bool:
-    if dest.exists() and not force:
-        report.append(("skip", dest))
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content, encoding="utf-8")
-    report.append(("write", dest))
-    return True
+def pick_harness(repo: Path, explicit: Optional[str]) -> tuple[str, str]:
+    """(harness, why). Explicit flag > existing config > the only agent CLI on PATH > copilot."""
+    if explicit:
+        return normalize_harness(explicit), "--harness"
+    cfg_file = Path(repo) / SEMIPILOT_DIR / "config.yaml"
+    if cfg_file.exists():
+        user = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+        if user.get("harness"):
+            return normalize_harness(str(user["harness"])), "existing config"
+    has = {h: shutil.which(cls.default_command) is not None for h, cls in HARNESSES.items()}
+    if has.get("claude") and not has.get("copilot"):
+        return "claude", "only `claude` is on PATH"
+    return "copilot", "default" if not has.get("copilot") else "`copilot` is on PATH"
 
 
-def config_template(d: Detected) -> str:
+def config_template(d: Detected, harness: str) -> str:
     """The user-facing config: short, commented, only what they might need to touch."""
     checks_yaml = yaml.safe_dump(d.checks, sort_keys=False, default_flow_style=False).rstrip()
     patterns_yaml = yaml.safe_dump(d.test_patterns, default_flow_style=False).rstrip()
     notes = "".join(f"# note: {n}\n" for n in d.notes)
-    return f"""# semipilot — repository configuration (detected stack: {d.stack})
-# Everything not listed here has a built-in default; run `semipilot config` to see the full effective config.
+    return f"""# semipilot — project configuration (detected stack: {d.stack})
+# Everything not listed here has a built-in default; `semipilot config` prints the full effective config.
 {notes}
+# The agent CLI that runs the unattended loop: copilot (GitHub Copilot CLI) | claude (Claude Code).
+harness: {harness}
+
 # The commands that define "done". All must pass after every task, fastest first.
 # Keep `{{task_tests}}` in the test command: it expands to the current task's locked test files
 # (and is empty for the final full-suite run).
@@ -54,7 +81,7 @@ tests:
 {_indent(patterns_yaml, 4)}
 
 # runner:
-#   model: null            # pin a Copilot model id, or leave the CLI default
+#   model: null            # pin a model for every loop call, or leave the CLI default
 # budget:
 #   max_iterations: 30     # implementer calls per run
 #   wall_clock_seconds: 21600
@@ -66,41 +93,91 @@ def _indent(text: str, n: int) -> str:
     return "\n".join(pad + line if line else line for line in text.splitlines())
 
 
-def instructions_template(repo: Path, d: Detected) -> str:
-    text = _asset("copilot-instructions.md")
-    return (text.replace("{{REPO_NAME}}", repo.name)
-            .replace("{{BUILD}}", d.commands.get("build", "<build command>"))
-            .replace("{{TEST}}", d.commands.get("test", "<test command>"))
-            .replace("{{LINT}}", d.commands.get("lint", "<lint command, or 'none'>")))
+def agents_md(repo: Path, d: Detected) -> str:
+    return (template("AGENTS.template.md")
+            .replace("{{REPO_NAME}}", repo.name)
+            .replace("{{BUILD}}", d.commands.get("build", "{{TODO: build command, or 'none'}}"))
+            .replace("{{TEST}}", d.commands.get("test", "{{TODO: test command}}"))
+            .replace("{{LINT}}", d.commands.get("lint", "{{TODO: lint command, or 'none'}}")))
 
 
-def init(repo: Path, force: bool = False) -> tuple[Detected, list]:
+def _write(dest: Path, content: str, report: list, force: bool = False) -> bool:
+    if dest.exists() and not force:
+        report.append(("skip", dest))
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    report.append(("write", dest))
+    return True
+
+
+def set_harness_line(cfg_file: Path, harness: str) -> bool:
+    """Point an existing config at another harness, changing only the `harness:` line."""
+    text = cfg_file.read_text(encoding="utf-8")
+    if re.search(r"^harness:\s*\S+", text, re.MULTILINE):
+        new = re.sub(r"^harness:\s*\S+.*$", f"harness: {harness}", text, count=1, flags=re.MULTILINE)
+    else:
+        new = f"harness: {harness}\n\n" + text
+    if new != text:
+        cfg_file.write_text(new, encoding="utf-8")
+        return True
+    return False
+
+
+def init(repo: Path, force: bool = False, harness: Optional[str] = None,
+         skills_for: Optional[list] = None) -> tuple[Detected, list, dict]:
+    """Returns (detected stack, [(action, path)], info) where info has harness, why, skills_for, notes."""
     repo = Path(repo).resolve()
     lay = Layout(repo)
     report: list = []
     d = detect(repo)
+    h, why = pick_harness(repo, harness)
+    chats = [normalize_harness(x) for x in (skills_for or [h])]
+    notes: list = []
     if knowledge_layer_present(repo, {}):
-        d.notes.append("knowledge layer detected (docs/cards + scripts/kb): the refiner, critics and the loop will use it; run @scribe after each review")
+        notes.append("knowledge layer detected (docs/cards + scripts/kb): the skills and the loop use it; run the "
+                     "semipilot-scribe skill after each review")
+        if kb_flavor(repo) == "node":
+            notes.append("the knowledge layer still uses the Node scripts — `semipilot kb init --force` adds "
+                         "scripts/kb/kb.py and switches the hook and CI to it (cards untouched)")
 
-    _write(lay.config, config_template(d), report, force)
-    _write(lay.root / ".gitignore", "runs/\nlast-run\n", report, force)
+    if lay.config.exists():  # the one file the user edits: never overwritten, not even with --force
+        report.append(("skip", lay.config))
+        if harness and set_harness_line(lay.config, h):
+            report[-1] = ("update", lay.config)
+    else:
+        _write(lay.config, config_template(d, h), report)
+    _write(lay.root / ".gitignore", "runs/\nlast-run\n", report)
     lay.features.mkdir(parents=True, exist_ok=True)
 
-    prompts_dir = repo / ".github" / "prompts"
-    agents_dir = repo / ".github" / "agents"
-    for name in ("refine-requirements.prompt.md", "spec-critic.prompt.md"):
-        _write(prompts_dir / name, _asset("prompts", name), report, force)
-    for entry in sorted(resources.files("semipilot").joinpath("assets", "agents").iterdir(), key=lambda e: e.name):
-        if entry.name.endswith(".agent.md"):
-            _write(agents_dir / entry.name, entry.read_text(encoding="utf-8"), report, force)
+    for c in dict.fromkeys(chats):
+        report += install_skills(repo, c, force=force)
 
-    instr = repo / ".github" / "copilot-instructions.md"
-    if not instr.exists():
-        _write(instr, instructions_template(repo, d), report)
-    else:
-        report.append(("skip", instr))
-    return d, report
+    main = instructions_file(repo, {})
+    if not (repo / main).exists():
+        _write(repo / "AGENTS.md", agents_md(repo, d), report)
+        main = "AGENTS.md"
+    if "claude" in chats or h == "claude":
+        claude_md = repo / "CLAUDE.md"
+        if main == ".github/copilot-instructions.md" and not (repo / "AGENTS.md").exists() and not claude_md.exists():
+            _write(claude_md, "@.github/copilot-instructions.md\n", report)
+        elif claude_md.exists() and (repo / "AGENTS.md").exists() and "AGENTS.md" not in claude_md.read_text(encoding="utf-8"):
+            notes.append("CLAUDE.md exists, so Claude Code will not read AGENTS.md — add a line `@AGENTS.md` to CLAUDE.md")
+    rc = ((yaml.safe_load(lay.config.read_text(encoding="utf-8")) or {}).get("runner") or {}) if lay.config.exists() else {}
+    if rc.get("command") and Path(str(rc["command"]).split()[0]).name != HARNESSES[h].default_command:
+        notes.append(f"runner.command in .semipilot/config.yaml is {rc['command']!r}, which overrides the {h} harness's "
+                     f"executable — remove it, or set harnesses.{h}.command instead")
+    if any(r[0] == "update" and SKILL_DIRS[c] in str(r[1]) for r in report for c in chats):
+        notes.append("semipilot-* skill folders from another version were replaced (`git diff` shows any local edits)")
+    for path, why_legacy in LEGACY_FILES.items():
+        if (repo / path).exists():
+            notes.append(f"{path} is no longer used ({why_legacy}); delete it when you are ready")
+    if len(set(chats)) > 1:
+        notes.append("skills installed in both .agents/skills and .claude/skills; Copilot CLI reads both folders and "
+                     "may list each semipilot skill twice (same content)")
+    return d, report, {"harness": h, "why": why, "skills_for": list(dict.fromkeys(chats)), "notes": d.notes + notes,
+                       "instructions": main}
 
 
-def which(cmd: str) -> str | None:
-    return shutil.which(cmd)
+def skills_dirs_for(chats: list) -> list:
+    return [SKILL_DIRS[c] for c in chats]

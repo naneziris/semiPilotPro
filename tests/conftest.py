@@ -10,8 +10,19 @@ from semipilot import orchestrator as orch
 from semipilot.config import load_config
 
 HERE = Path(__file__).resolve().parent
-FAKE = HERE / "fake_copilot.py"
+FAKE = HERE / "fake_agent.py"
 FEATURE = "calc"
+HARNESSES = ("copilot", "claude")
+
+# Error text each harness really prints (Copilot: seeded patterns; Claude Code: documented strings).
+ERRORS = {
+    "copilot": {"transient": "Error: 502 Bad Gateway", "outage": "503 Service Unavailable",
+                "fatal": "HTTP 401 Unauthorized: bad credentials",
+                "quota": "Copilot premium request quota exceeded for this billing period"},
+    "claude": {"transient": "API Error: 500 Internal server error", "outage": "API Error: Repeated 529 Overloaded errors",
+               "fatal": "Not logged in · Please run /login",
+               "quota": "You've hit your session limit · resets 3:45pm"},
+}
 
 SPEC = """---
 feature: calc
@@ -57,8 +68,13 @@ MUL_OK = "def mul(a, b):\n    return a * b\n"
 ACCEPT = {"exit": 0, "stdout": json.dumps({"verdict": "accept", "issues": []})}
 
 
-def step(exit=0, stdout="OK", stderr="", actions=None):
-    return {"exit": exit, "stdout": stdout, "stderr": stderr, "actions": actions or []}
+def task_of(prompt: str) -> str:
+    """The task part of a loop prompt (after the role definition, if any)."""
+    return prompt.split("\n# Your task\n", 1)[-1]
+
+
+def step(exit=0, stdout="OK", stderr="", actions=None, claude_json=None):
+    return {"exit": exit, "stdout": stdout, "stderr": stderr, "actions": actions or [], "claude_json": claude_json}
 
 
 def write(path, content):
@@ -66,7 +82,9 @@ def write(path, content):
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, subdir: str = ""):
+    def __init__(self, tmp_path: Path, subdir: str = "", harness: str = "copilot"):
+        self.harness = harness
+        self.err = ERRORS[harness]
         # subdir="apps/api": the project is a subfolder of the git repository (monorepo layout)
         self.git_root = tmp_path / "repo"
         self.repo = self.git_root / subdir if subdir else self.git_root
@@ -74,8 +92,8 @@ class Harness:
         self.state = tmp_path / "state"
         self.scenario_path = tmp_path / "scenario.json"
         self.calls_path = tmp_path / "calls.jsonl"
-        os.environ["FAKE_COPILOT_SCENARIO"] = str(self.scenario_path)
-        os.environ["FAKE_COPILOT_CALLS"] = str(self.calls_path)
+        os.environ["FAKE_AGENT_SCENARIO"] = str(self.scenario_path)
+        os.environ["FAKE_AGENT_CALLS"] = str(self.calls_path)
         self._git("init", "-q", "-b", "main")
         self._git("config", "user.email", "t@t")
         self._git("config", "user.name", "t")
@@ -87,13 +105,16 @@ class Harness:
         self._git("add", "-A")
         self._git("commit", "-q", "-m", "init")
         self.cfg = load_config(self.repo)
+        self.cfg["harness"] = harness
         self.cfg["runner"]["command"] = f"{sys.executable} {FAKE}"
         self.cfg["runner"]["call_timeout_seconds"] = 30
         self.cfg["state_dir"] = str(self.state)
         self.cfg["infra"].update({"backoff_start_seconds": 0.01, "backoff_cap_seconds": 0.02})
         self.cfg["checks"] = [
-            {"name": "build", "cmd": f"{sys.executable} -m compileall -q calc"},
-            {"name": "tests", "cmd": f"{sys.executable} -m pytest -q -p no:cacheprovider {{task_tests}}"},
+            # syntax check without writing .pyc files: compileall's bytecode could outlive a same-size, same-second
+            # rewrite of a module between two attempts and make the tests see the old code
+            {"name": "build", "cmd": f"{sys.executable} -c \"import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('calc').rglob('*.py')]\""},
+            {"name": "tests", "cmd": f"{sys.executable} -B -m pytest -q -p no:cacheprovider {{task_tests}}"},
         ]
         self.sleeps = []
 
@@ -157,15 +178,16 @@ class Harness:
         return (self.feat / "report.md").read_text()
 
 
-@pytest.fixture
-def h(tmp_path):
-    return Harness(tmp_path)
+@pytest.fixture(params=HARNESSES)
+def h(tmp_path, request):
+    """A throwaway repo with an approved spec; every test using it runs once per supported harness."""
+    return Harness(tmp_path, harness=request.param)
 
 
-@pytest.fixture
-def h_sub(tmp_path):
+@pytest.fixture(params=HARNESSES)
+def h_sub(tmp_path, request):
     """Same, with the project in apps/api/ of a monorepo whose git root has a sibling app."""
-    hs = Harness(tmp_path, subdir="apps/api")
+    hs = Harness(tmp_path, subdir="apps/api", harness=request.param)
     (hs.git_root / "apps" / "web").mkdir(parents=True)
     (hs.git_root / "apps" / "web" / "index.js").write_text("// sibling app\n")
     hs._git("add", "-A")

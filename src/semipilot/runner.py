@@ -1,20 +1,20 @@
-"""Copilot CLI runner for the PilotInLoop loop.
+"""Agent runner for the PilotInLoop loop — harness-agnostic.
 
 Responsibilities (handoff §4.2, §4.3, §4.6):
-- one fresh `copilot -p ...` process per call; refuses resume/continue flags
-- per-call timeout and logging (prompt, stdout, stderr, exit code, duration)
+- one fresh agent process per call, built by the configured harness adapter (`harness.py`); session/resume and
+  permission-bypass flags are refused
+- per-call timeout and logging (prompt, stdout, stderr, exit code, duration, cost when the harness reports it)
 - failure classification: ok | task_failure | transient | fatal | quota_exhausted | unknown
 - retry with exponential backoff + jitter for transient failures
 - circuit breaker on continuous / total outage
 - raises HaltRun for fatal / quota / breaker so the orchestrator can stop cleanly
 
-The interface is deliberately small so the runner can be swapped:
-    runner.run(role, prompt, attempt_label) -> CallResult
+The interface is deliberately small:
+    runner.run(role, prompt, attempt_label) -> CallResult      (CallResult.text is the agent's answer)
 """
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import shlex
@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .harness import ForbiddenFlagError, Harness, get_harness, role_profile  # noqa: F401  (re-exported)
+
 OK = "ok"
 TASK_FAILURE = "task_failure"
 TRANSIENT = "transient"
@@ -31,7 +33,7 @@ FATAL = "fatal"
 QUOTA = "quota_exhausted"
 UNKNOWN = "unknown"
 
-HARD_FORBIDDEN_FLAGS = ("--resume", "--continue", "--session-id")
+AGENT_UNAVAILABLE = "agent_unavailable"
 
 
 class HaltRun(Exception):
@@ -43,10 +45,6 @@ class HaltRun(Exception):
         self.detail = detail
 
 
-class ForbiddenFlagError(ValueError):
-    pass
-
-
 @dataclass
 class CallResult:
     exit_code: int
@@ -56,10 +54,17 @@ class CallResult:
     timed_out: bool = False
     kind: str = OK
     log_path: Optional[str] = None
-    command: list[str] = field(default_factory=list)
+    command: list = field(default_factory=list)
+    text: str = ""            # the agent's answer (stdout for plain-text CLIs, `result` for JSON ones)
+    meta: dict = field(default_factory=dict)
 
     @property
     def combined(self) -> str:
+        """The text failure patterns are matched against. For a JSON-speaking harness that is the answer, its error
+        list and stderr — never the raw JSON, whose telemetry numbers (`ttft_ms: 429`, …) would match status codes."""
+        if self.meta:
+            errs = self.meta.get("errors")
+            return "\n".join(x for x in (self.text, errs if isinstance(errs, str) else "", self.stderr) if x)
         return f"{self.stdout}\n{self.stderr}"
 
 
@@ -95,18 +100,31 @@ class OutageTracker:
         }
 
 
-def classify(result: CallResult, patterns: dict) -> str:
-    """Classify a CLI outcome. Timeouts are task failures (the orchestrator decides what to do)."""
-    if result.timed_out:
-        return TASK_FAILURE
-    if result.exit_code == 0:
-        return OK
-    text = f"exit={result.exit_code}\n{result.combined}"
+def match_patterns(text: str, patterns: dict) -> Optional[str]:
     for kind in (FATAL, QUOTA, TRANSIENT):
         for pat in patterns.get(kind, []):
             if re.search(pat, text, re.IGNORECASE):
                 return kind
-    return UNKNOWN
+    return None
+
+
+def classify(result: CallResult, patterns: dict, harness: Optional[Harness] = None) -> str:
+    """Classify a CLI outcome. Timeouts are task failures (the orchestrator decides what to do).
+
+    A zero exit is OK unless the harness itself reports an error (`meta.is_error`, e.g. Claude Code's JSON result);
+    such an error is classified by the patterns, and counts as a task failure when none match (max turns etc.)."""
+    if result.timed_out:
+        return TASK_FAILURE
+    if result.exit_code == 0 and not result.meta.get("is_error"):
+        return OK
+    structured = harness.classify_meta(result.meta) if harness else None
+    if structured:
+        return structured
+    text = f"exit={result.exit_code}\n{result.combined}"
+    kind = match_patterns(text, patterns)
+    if kind:
+        return kind
+    return TASK_FAILURE if result.exit_code == 0 else UNKNOWN
 
 
 def _parse_retry_after(text: str) -> Optional[float]:
@@ -114,7 +132,7 @@ def _parse_retry_after(text: str) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
-class CopilotRunner:
+class Runner:
     def __init__(
         self,
         config: dict,
@@ -123,11 +141,13 @@ class CopilotRunner:
         reset_tree_fn: Optional[Callable[[], None]] = None,
         cwd: Optional[Path] = None,
         env: Optional[dict] = None,
+        harness: Optional[Harness] = None,
     ):
         self.cfg = config
         self.rcfg = config["runner"]
         self.icfg = config["infra"]
-        self.patterns = config.get("failure_patterns", {})
+        self.harness = harness or get_harness(config)
+        self.patterns = self.harness.failure_patterns()
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.sleep = sleep_fn
@@ -138,79 +158,64 @@ class CopilotRunner:
             max_continuous_s=float(self.icfg["max_outage_seconds"]),
             max_total_s=float(self.icfg["max_total_outage_seconds"]),
         )
-        self.calls: list[dict] = []
-        self._unknown_seen: set[str] = set()
+        self.calls: list = []
+        self.cost_usd: float = 0.0
+        self._unknown_seen: set = set()
 
     # ------------------------------------------------------------------ command
-    def build_command(self, role: str, prompt: str, extra: Optional[list[str]] = None) -> list[str]:
-        r = self.rcfg
-        cmd = shlex.split(r["command"]) if isinstance(r["command"], str) else list(r["command"])
-        cmd += ["-p", prompt, "-s", "--no-ask-user"]
-        if r.get("model"):
-            cmd += ["--model", str(r["model"])]
-        agent = (r.get("agents") or {}).get(role)
-        if agent:
-            cmd += ["--agent", str(agent)]
-        for tool in (r.get("allow_tools") or {}).get(role, []) or []:
-            cmd += [f"--allow-tool={tool}"]
-        for tool in r.get("deny_tools") or []:
-            cmd += [f"--deny-tool={tool}"]
-        cmd += ["--log-dir", str(self.log_dir / "cli")]
-        cmd += list(r.get("extra_flags") or [])
-        cmd += list(extra or [])
-        self._guard(cmd)
-        return cmd
+    def build(self, role: str, prompt: str, extra: Optional[list] = None):
+        profile = role_profile(self.cfg, role)
+        return self.harness.command(role, profile, prompt, str(self.log_dir / "cli"), extra)
 
-    def _guard(self, cmd: list[str]) -> None:
-        forbidden = set(HARD_FORBIDDEN_FLAGS) | set(self.rcfg.get("forbidden_flags") or [])
-        for arg in cmd[1:]:
-            if arg in ("-p",):
-                continue
-            for f in forbidden:
-                if arg == f or arg.startswith(f + "="):
-                    raise ForbiddenFlagError(
-                        f"refusing to build a command line containing {f!r}: one fresh session per call is a hard requirement"
-                    )
+    def build_command(self, role: str, prompt: str, extra: Optional[list] = None) -> list:
+        return self.build(role, prompt, extra).argv
 
     # ------------------------------------------------------------------ invoke
-    def invoke(self, role: str, prompt: str, attempt_label: str, extra: Optional[list[str]] = None) -> CallResult:
-        cmd = self.build_command(role, prompt, extra)
+    def invoke(self, role: str, prompt: str, attempt_label: str, extra: Optional[list] = None) -> CallResult:
+        inv = self.build(role, prompt, extra)
         timeout = float(self.rcfg["call_timeout_seconds"])
         log_path = self.log_dir / f"{attempt_label}.log"
         t0 = time.monotonic()
         timed_out = False
+        stdin_kw = {"input": inv.stdin} if inv.stdin is not None else {"stdin": subprocess.DEVNULL}
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout, cwd=self.cwd, env=self.env,
-                stdin=subprocess.DEVNULL,
-            )
+            proc = subprocess.run(inv.argv, capture_output=True, text=True, timeout=timeout, cwd=self.cwd,
+                                  env=self.env, **stdin_kw)
             code, out, err = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired as e:
             timed_out = True
             code = -9
             out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
             err = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        except FileNotFoundError:
+            code, out, err = 127, "", f"{inv.argv[0]}: command not found — {self.harness.install_hint}"
         dur = time.monotonic() - t0
+        text, meta = self.harness.response(out)
         res = CallResult(exit_code=code, stdout=out, stderr=err, duration_s=dur, timed_out=timed_out,
-                         log_path=str(log_path), command=cmd)
-        res.kind = classify(res, self.patterns)
+                         log_path=str(log_path), command=inv.argv, text=text, meta=meta)
+        res.kind = classify(res, self.patterns, self.harness)
+        cost = meta.get("total_cost_usd")
+        if isinstance(cost, (int, float)):
+            self.cost_usd += float(cost)
         self._write_log(log_path, role, prompt, res)
         self.calls.append({"label": attempt_label, "role": role, "kind": res.kind, "exit": code,
-                           "duration_s": round(dur, 1), "timed_out": timed_out})
+                           "duration_s": round(dur, 1), "timed_out": timed_out,
+                           **({"cost_usd": round(float(cost), 4)} if isinstance(cost, (int, float)) else {})})
         return res
 
     def _write_log(self, path: Path, role: str, prompt: str, res: CallResult) -> None:
-        redacted = [a if not a.startswith("-p") else a for a in res.command]
+        shown = [a for a in res.command if a != prompt]
         body = [
-            f"# role: {role}", f"# kind: {res.kind}", f"# exit: {res.exit_code}",
-            f"# duration_s: {res.duration_s:.1f}", f"# timed_out: {res.timed_out}",
-            f"# command: {' '.join(shlex.quote(a) for a in redacted if a != prompt)}",
-            "", "## PROMPT", prompt, "", "## STDOUT", res.stdout, "", "## STDERR", res.stderr,
+            f"# harness: {self.harness.name}", f"# role: {role} ({role_profile(self.cfg, role)})",
+            f"# kind: {res.kind}", f"# exit: {res.exit_code}", f"# duration_s: {res.duration_s:.1f}",
+            f"# timed_out: {res.timed_out}", f"# meta: {json.dumps(res.meta)}",
+            f"# command: {' '.join(shlex.quote(a) for a in shown)}",
+            "", "## PROMPT", prompt, "", "## ANSWER", res.text, "", "## STDOUT", res.stdout, "", "## STDERR", res.stderr,
         ]
-        path.write_text("\n".join(body))
+        path.write_text("\n".join(body), encoding="utf-8")
 
     # ------------------------------------------------------------------ retry policy
-    def run(self, role: str, prompt: str, attempt_label: str, extra: Optional[list[str]] = None) -> CallResult:
+    def run(self, role: str, prompt: str, attempt_label: str, extra: Optional[list] = None) -> CallResult:
         """Invoke with the §4.6 policy. Returns only ok / task_failure results; raises HaltRun otherwise.
 
         The task's attempt counter is owned by the orchestrator and is NOT affected by transient retries.
@@ -243,7 +248,8 @@ class CopilotRunner:
             wait = wait if wait is not None else _jitter(delay)
             self.outage.add_wait(wait)
             if self.outage.tripped():
-                raise HaltRun("copilot_unavailable", f"outage breaker tripped after {self.outage.transient_count} transient failures")
+                raise HaltRun(AGENT_UNAVAILABLE, f"{self.harness.label}: outage breaker tripped after "
+                                                 f"{self.outage.transient_count} transient failures")
             self.sleep(wait)
             delay = min(delay * 2, cap)
             infra_try += 1
@@ -259,10 +265,16 @@ class CopilotRunner:
             candidates.append(text[start:text.rfind("}") + 1])
         for c in candidates:
             try:
-                return json.loads(c)
+                obj = json.loads(c)
             except json.JSONDecodeError:
                 continue
+            if isinstance(obj, dict):
+                return obj
         return None
+
+
+# Backwards-compatible name (v0.1 imported CopilotRunner).
+CopilotRunner = Runner
 
 
 def _jitter(delay: float) -> float:

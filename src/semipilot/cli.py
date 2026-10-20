@@ -1,7 +1,7 @@
 """semipilot command line.
 
-    semipilot init                 make this repo ready (config, /refine-requirements and /spec-critic, agents)
-    semipilot doctor               check Copilot CLI, git, config and checks
+    semipilot init                 make this project ready: config, the skill pack for your agent, AGENTS.md
+    semipilot doctor               check the harness CLI, git, config, skills, instructions and checks
     semipilot preflight <feature>  checks + the planner's questions, without starting the run
     semipilot run <feature>        PilotInLoop: run the loop for approved requirements on a new branch made from
                                    the branch you are on (asks its questions first)
@@ -9,13 +9,14 @@
     semipilot review [feature]     print the report, assumptions first
     semipilot resume [feature]     continue an interrupted / blocked run
     semipilot rollback <feature> <task>   git-revert a task and its dependents, set them to pending
+    semipilot kb init|validate|index|resolve|drift|guard|catchup   the knowledge layer
     semipilot config               print the effective configuration
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,8 +25,12 @@ from pathlib import Path
 from ._yaml import yaml
 
 from . import __version__
-from .config import CONFIG_FILE, SEMIPILOT_DIR, Layout, knowledge_layer_present, load_config
+from .config import (CONFIG_FILE, SEMIPILOT_DIR, Layout, instructions_file, kb_commands, kb_flavor,
+                     knowledge_layer_present, legacy_config_notes, load_config)
+from .harness import UnknownHarnessError, get_harness
 from .orchestrator import Git, Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter, parse_questions
+from .runner import HaltRun
+from .skills_pack import SKILL_DIRS, SKILLS
 
 
 def find_repo(start: Path) -> Path:
@@ -53,6 +58,17 @@ def say(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def _rel(path: Path, base: Path) -> str:
+    return os.path.relpath(path, base)
+
+
+def _filled(text: str) -> bool:
+    """An instructions file still holding template placeholders counts as empty."""
+    if "{{TODO" in text:
+        return False
+    return not re.search(r"^\s*-\s*<[^>\n]+>\s*$", text, re.MULTILINE)
+
+
 # --------------------------------------------------------------------------- commands
 def cmd_init(a) -> int:
     from .initcmd import init
@@ -60,19 +76,27 @@ def cmd_init(a) -> int:
     repo = Path(a.repo).resolve() if a.here else find_repo(a.repo)
     if a.here:
         git_root(repo)  # exits when not inside a git repository
-    d, report = init(repo, force=a.force)
-    say(f"semipilot init → {repo.name} (detected: {d.stack})")
+    skills_for = None
+    if a.skills:
+        skills_for = ["copilot", "claude"] if a.skills.strip().lower() in ("both", "all") else \
+            [x for x in re.split(r"[,\s]+", a.skills) if x]
+    d, report, info = init(repo, force=a.force, harness=a.harness, skills_for=skills_for)
+    h = info["harness"]
+    say(f"semipilot init → {repo.name} (detected: {d.stack}; loop harness: {h}, {info['why']})")
     for action, path in report:
-        say(f"  {'installed' if action == 'write' else 'kept     '}  {path.relative_to(repo)}")
-    for n in d.notes:
+        label = {"write": "installed", "update": "updated  "}.get(action, "kept     ")
+        say(f"  {label}  {_rel(path, repo)}")
+    for n in info["notes"]:
         say(f"  note: {n}")
+    chat = " / ".join({"copilot": "VS Code Copilot chat or Copilot CLI", "claude": "Claude Code"}[c] for c in info["skills_for"])
     say()
     say("Next:")
-    say("  1. Open .semipilot/config.yaml and confirm the `checks` commands are right for this repo.")
-    say("  2. Fill in .github/copilot-instructions.md (one page: commands, conventions, architecture).")
-    say("  3. In VS Code Copilot chat:  /refine-requirements <your idea>   then   /spec-critic   → reply `approve`")
+    say("  1. Open .semipilot/config.yaml and confirm the `checks` commands are right for this project.")
+    say(f"  2. Fill in {info['instructions']} (one page: commands, conventions, architecture) — every agent reads it.")
+    say(f"  3. In {chat}:  /semipilot-refine <your idea>   then   /semipilot-spec-critic   → reply `approve`")
     say("  4. In a terminal, on your base branch (usually main):  semipilot run <feature>   — it creates feat/<feature> from there")
     say("                               (`semipilot preflight <feature>` first does the checks and the planner's questions only)")
+    say("Optional: `semipilot kb init` adds the knowledge layer (module cards + deterministic retrieval).")
     say("Run `semipilot doctor` any time to check the setup.")
     return 0
 
@@ -88,47 +112,74 @@ def cmd_doctor(a) -> int:
         ok = ok and good
         say(f"  [{'ok' if good else '!!'}] {label}" + (f" — {hint}" if (hint and not good) else ""))
 
+    def info(label: str) -> None:
+        say(f"  [--] {label}")
+
     say(f"semipilot doctor → {repo.name}")
     prefix = Git(repo).prefix
     if prefix:
-        check(f"project {prefix} inside repository {git_root(repo).name} (.semipilot, .github and the knowledge layer are looked up here)", True)
+        check(f"project {prefix} inside repository {git_root(repo).name} (.semipilot, skills and the knowledge layer are looked up here)", True)
     else:
         check("git repository (project = repository root)", True)
     check(".semipilot/config.yaml", lay.config.exists(), "run `semipilot init`")
-    check("/refine-requirements and /spec-critic prompts", (repo / ".github/prompts/refine-requirements.prompt.md").exists() and (repo / ".github/prompts/spec-critic.prompt.md").exists(), "run `semipilot init`")
-    check("@refiner and @spec-critic agents", (repo / ".github/agents/refiner.agent.md").exists() and (repo / ".github/agents/spec-critic.agent.md").exists(), "run `semipilot init`")
-    ref = repo / ".github/agents/refiner.agent.md"
-    if ref.exists() and ".semipilot/features" not in ref.read_text(encoding="utf-8"):
-        check("@refiner is the semipilot version", False, "an older semiPilotPro refiner is installed; it writes .github/requirements/requirements.md, which `semipilot run` accepts as-is (legacy layout) — or `semipilot init --force` to update it")
-    check("PilotInLoop agents", all((repo / f".github/agents/pilotinloop-{n}.agent.md").exists() for n in ("planner", "spec-critic", "plan-critic")), "run `semipilot init`")
+    try:
+        harness = get_harness(cfg)
+        check(f"harness: {harness.name} ({harness.label})", True)
+    except UnknownHarnessError as e:
+        check("harness", False, str(e))
+        harness = None
+    for n in legacy_config_notes(cfg):
+        info(n)
+    installed = [h for h, d in SKILL_DIRS.items() if all((repo / d / s / "SKILL.md").exists() for s in SKILLS)]
+    if harness:
+        check(f"skill pack in {SKILL_DIRS[harness.name]}/ (semipilot-refine, -spec-critic, -run, -scribe, -knowledge)",
+              harness.name in installed, f"run `semipilot init --harness {harness.name}` (or --skills both)")
+    for h in installed:
+        if not harness or h != harness.name:
+            info(f"skill pack also installed for {h} ({SKILL_DIRS[h]}/)")
+    for legacy in (".github/agents/pilotinloop-planner.agent.md", ".github/prompts/refine-requirements.prompt.md"):
+        if (repo / legacy).exists():
+            info(f"{legacy} is from v0.1 and no longer used (skills and inlined roles replace it); delete when ready")
     if knowledge_layer_present(repo, cfg):
-        vcmd = cfg["knowledge_layer"]["validate_cmd"]
+        vcmd, _ = kb_commands(repo, cfg)
         r = subprocess.run(vcmd, shell=True, cwd=repo, capture_output=True, text=True)
         check(f"knowledge layer healthy (`{vcmd}`)", r.returncode == 0, (r.stdout + r.stderr).strip()[-300:])
+        if kb_flavor(repo) == "node":
+            info("knowledge layer uses the Node scripts — `semipilot kb init --force` switches to scripts/kb/kb.py (cards untouched)")
     else:
-        say("  [--] no knowledge layer (docs/cards + scripts/kb) — optional; agents use copilot-instructions.md and the code")
-    instr = repo / ".github/copilot-instructions.md"
-    instr_ok = instr.exists() and "<" not in instr.read_text(encoding="utf-8").split("## Conventions")[0]
-    check(".github/copilot-instructions.md filled in", instr_ok, "replace the <placeholders> — the critics reject an empty one")
+        info("no knowledge layer (docs/cards + scripts/kb) — optional; `semipilot kb init` adds it")
+    main = instructions_file(repo, cfg)
+    p = repo / main
+    check(f"{main} filled in", p.exists() and _filled(p.read_text(encoding="utf-8")),
+          "replace the {{TODO}} / <placeholder> lines — the critics reject an empty one")
+    if harness and harness.name == "claude" and main == ".github/copilot-instructions.md" and not (repo / "CLAUDE.md").exists():
+        check("Claude Code can read the instructions", False, "add CLAUDE.md with the line `@.github/copilot-instructions.md`, or move them to AGENTS.md")
+    if harness and harness.name == "claude" and (repo / "CLAUDE.md").exists() and (repo / "AGENTS.md").exists() \
+            and "AGENTS.md" not in (repo / "CLAUDE.md").read_text(encoding="utf-8"):
+        check("Claude Code can read AGENTS.md", False, "CLAUDE.md exists, so Claude Code skips AGENTS.md — add a line `@AGENTS.md` to CLAUDE.md")
     checks = cfg.get("checks") or []
     todo = [c for c in checks if str(c.get("cmd", "")).lstrip().startswith("#")]
     check(f"checks configured ({len(checks)})", bool(checks) and not todo, "edit `checks` in .semipilot/config.yaml")
     has_task_tests = any("{task_tests}" in str(c.get("cmd", "")) for c in checks)
     check("test check uses {task_tests}", has_task_tests, "without it every task runs the whole suite (slower, still works)")
-    cmd = cfg["runner"]["command"].split()[0]
-    copilot = shutil.which(cmd)
-    check(f"Copilot CLI on PATH ({cmd})", copilot is not None, "install the GitHub Copilot CLI and run `copilot login`")
-    if copilot and not a.offline:
-        try:
-            r = subprocess.run([cmd, "-p", cfg["preflight"]["health_prompt"], "-s", "--no-ask-user"],
-                               capture_output=True, text=True, timeout=120, cwd=repo, stdin=subprocess.DEVNULL)
-            check("Copilot CLI answers", r.returncode == 0, (r.stdout + r.stderr).strip()[-300:] or "run `copilot login`")
-        except Exception as e:  # noqa: BLE001
-            check("Copilot CLI answers", False, str(e))
+    if harness:
+        exe = harness.executable[0]
+        found = shutil.which(exe) is not None
+        check(f"{harness.label} on PATH ({exe})", found, harness.install_hint)
+        if found and not a.offline:
+            try:
+                inv = harness.health(cfg["preflight"]["health_prompt"], str(lay.runs / "doctor"))
+                kw = {"input": inv.stdin} if inv.stdin is not None else {"stdin": subprocess.DEVNULL}
+                r = subprocess.run(inv.argv, capture_output=True, text=True, timeout=180, cwd=repo, **kw)
+                text, meta = harness.response(r.stdout)
+                good = r.returncode == 0 and not meta.get("is_error")
+                check(f"{harness.label} answers", good, (text + r.stderr).strip()[-300:] or f"log in: {harness.login_hint}")
+            except Exception as e:  # noqa: BLE001
+                check(f"{harness.label} answers", False, str(e))
     if not ok:
         say("\nFix the [!!] lines, then run `semipilot doctor` again.")
     else:
-        say("\nAll good. Next: /refine-requirements in Copilot chat, then /spec-critic, then `semipilot run <feature>`.")
+        say("\nAll good. Next: /semipilot-refine in your agent's chat, then /semipilot-spec-critic, then `semipilot run <feature>`.")
     return 0 if ok else 1
 
 
@@ -148,8 +199,8 @@ def feature_state(lay: Layout, slug: str, cfg: dict) -> tuple[str, str]:
         fm = parse_frontmatter(lay.requirements(slug).read_text(encoding="utf-8"))
         if str(fm.get("status", "")).lower() == "approved":
             return "requirements approved", f"semipilot preflight {slug}  /  semipilot run {slug}"
-        return "requirements drafted, not approved", "/spec-critic in Copilot chat, then `approve`"
-    return "empty", "/refine-requirements in Copilot chat"
+        return "requirements drafted, not approved", "/semipilot-spec-critic in your agent's chat, then `approve`"
+    return "empty", "/semipilot-refine in your agent's chat"
 
 
 def cmd_status(a) -> int:
@@ -160,7 +211,7 @@ def cmd_status(a) -> int:
     if lay.has_legacy_requirements():
         say(f"  (legacy) {Layout.LEGACY_DIR}/requirements.md found — `semipilot run <any-slug>` uses it when no per-feature folder exists")
     if not feats:
-        say("no features yet — start with `/refine-requirements <idea>` in Copilot chat")
+        say("no features yet — start with `/semipilot-refine <idea>` in your agent's chat")
         return 0
     say(f"features in {repo.name}:")
     for slug in feats:
@@ -201,6 +252,9 @@ def cmd_run(a) -> int:
     except PreflightError as e:
         say(f"\nCannot start: {e}", )
         return 1
+    except HaltRun as h:  # e.g. auth or quota failure during the planner's questions, before the run starts
+        say(f"\nStopped before the run started: {h.reason} — {h.detail}")
+        return 2
     say()
     if reason == "preflight_ok":
         say(f"Ready. Start the run when the machine can stay awake:\n  semipilot run {a.feature}")
@@ -250,6 +304,37 @@ def cmd_review(a) -> int:
     return 0
 
 
+def cmd_kb(a) -> int:
+    from .kbcmd import kb_init, run_kb
+
+    args = list(a.kb_args or [])
+    if not args or args[0] in ("-h", "--help"):
+        say(__doc__.split("semipilot config")[0].strip().splitlines()[0])
+        say("usage: semipilot kb init [--system <prefix>] [--force]")
+        say("       semipilot kb validate | index [--check] | resolve --tags a,b [--json] | drift [--verbose] | guard [--files ...] | catchup [--mark]")
+        return 0 if args else 2
+    if args[0] == "--help-tool":
+        return run_kb(find_repo(a.repo), ["--help"])
+    if args[0] == "init":
+        ip = argparse.ArgumentParser(prog="semipilot kb init")
+        ip.add_argument("--system", default="", help="lowercase-kebab prefix for card ids (default: the project folder name)")
+        ip.add_argument("--force", action="store_true", help="refresh kb.py, the hook and the CI workflow (never knowledge content)")
+        ia = ip.parse_args(args[1:])
+        repo = find_repo(a.repo)
+        report, notes = kb_init(repo, ia.system, ia.force)
+        say(f"semipilot kb init → {repo.name}")
+        for action, path in report:
+            label = {"write": "installed", "update": "updated  "}.get(action, "kept     ")
+            say(f"  {label}  {_rel(path, repo)}")
+        for n in notes:
+            say(f"  note: {n}")
+        say()
+        say("Next: fill the layer with your agent — `/semipilot-knowledge bootstrap` — and approve each gate.")
+        say("Then `semipilot kb validate && semipilot kb index` and commit.")
+        return 0
+    return run_kb(find_repo(a.repo), args)
+
+
 def cmd_config(a) -> int:
     repo = find_repo(a.repo)
     cfg = load_config(repo)
@@ -265,13 +350,15 @@ def main(argv=None) -> int:
     ap.add_argument("--repo", default=".", help=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("init", help="make this repo ready: config, /refine-requirements and /spec-critic prompts, agents")
-    p.add_argument("--force", action="store_true", help="overwrite semipilot's own files (never your instructions)")
+    p = sub.add_parser("init", help="make this project ready: config, the skill pack for your agent, AGENTS.md")
+    p.add_argument("--harness", help="the agent CLI that runs the loop: copilot | claude (default: existing config, else the one on PATH, else copilot)")
+    p.add_argument("--skills", help="install the skill pack for these chats: copilot, claude or both (default: the harness)")
+    p.add_argument("--force", action="store_true", help="reinstall the semipilot-* skill folders even when they are current (your config and instructions are never overwritten)")
     p.add_argument("--here", action="store_true", help="set up the current directory as the project (for a project that lives in a subfolder of a bigger repository); later commands find it from anywhere inside")
     p.set_defaults(fn=cmd_init)
 
-    p = sub.add_parser("doctor", help="check Copilot CLI, config and checks")
-    p.add_argument("--offline", action="store_true", help="skip the Copilot CLI call")
+    p = sub.add_parser("doctor", help="check the harness CLI, config, skills, instructions and checks")
+    p.add_argument("--offline", action="store_true", help="skip the call to the agent CLI")
     p.set_defaults(fn=cmd_doctor)
 
     p = sub.add_parser("preflight", help="checks + the planner's questions, without starting the run")
@@ -304,6 +391,12 @@ def main(argv=None) -> int:
     p.add_argument("feature")
     p.add_argument("task", help="task id, e.g. T3")
     p.set_defaults(fn=cmd_rollback)
+
+    p = sub.add_parser("kb", help="the knowledge layer: init | validate | index | resolve | drift | guard | catchup",
+                       description="`semipilot kb init [--system <prefix>] [--force]` installs the knowledge layer; every other "
+                                   "subcommand runs scripts/kb/kb.py (see `semipilot kb --help-tool`).")
+    p.add_argument("kb_args", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_kb)
 
     p = sub.add_parser("config", help="print the effective configuration")
     p.set_defaults(fn=cmd_config)

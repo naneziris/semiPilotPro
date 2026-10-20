@@ -1,0 +1,26 @@
+#!/bin/sh
+# Knowledge-layer pre-commit gate (installed by `semipilot kb init`).
+#
+# Activate once per clone (the exact command was printed by `semipilot kb init`):
+#   git config core.hooksPath .githooks
+#
+# Blocks the commit when cards are malformed or the manifest is stale (both run in about a second, standard-library
+# Python only). The staleness nag (card-owned code changed without its card) prints but never blocks.
+# Emergency bypass: git commit --no-verify  (CI still checks).
+
+set -e
+
+# Run from the project that owns this hook (works when the project is a subfolder of a bigger repository).
+cd "$(dirname "$0")/.."
+
+PY=python3
+command -v python3 >/dev/null 2>&1 || PY=python
+
+$PY scripts/kb/kb.py validate
+$PY scripts/kb/kb.py index --check || {
+  echo ""
+  echo "pre-commit: docs/cards/manifest.json is stale — run '$PY scripts/kb/kb.py index' and stage it"
+  exit 1
+}
+
+git diff --cached --name-only --relative | $PY scripts/kb/kb.py guard

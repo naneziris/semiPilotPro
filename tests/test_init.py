@@ -42,21 +42,57 @@ def test_detect_unknown_leaves_todo(tmp_path):
     assert d.notes
 
 
+SKILL_NAMES = ["semipilot-knowledge", "semipilot-refine", "semipilot-run", "semipilot-scribe", "semipilot-spec-critic"]
+
+
 def test_init_writes_only_what_is_needed_and_never_overwrites(tmp_path):
     repo = mkrepo(tmp_path, {"pyproject.toml": "[project]\nname='x'\n", ".github/copilot-instructions.md": "# mine\n"})
-    d, report = init(repo)
+    d, report, info = init(repo, harness="copilot")
     written = sorted(str(p.relative_to(repo)) for a, p in report if a == "write")
-    assert written == sorted([
-        ".semipilot/config.yaml", ".semipilot/.gitignore",
-        ".github/prompts/refine-requirements.prompt.md", ".github/prompts/spec-critic.prompt.md",
-        ".github/agents/refiner.agent.md", ".github/agents/spec-critic.agent.md",
-        ".github/agents/pilotinloop-planner.agent.md", ".github/agents/pilotinloop-spec-critic.agent.md",
-        ".github/agents/pilotinloop-plan-critic.agent.md",
-    ])
-    assert (repo / ".github/copilot-instructions.md").read_text() == "# mine\n"
+    assert written == sorted([".semipilot/config.yaml", ".semipilot/.gitignore"] + [f".agents/skills/{n}" for n in SKILL_NAMES])
+    assert info["harness"] == "copilot" and info["instructions"] == ".github/copilot-instructions.md"
+    assert (repo / ".github/copilot-instructions.md").read_text() == "# mine\n"  # yours, untouched
+    assert not (repo / "AGENTS.md").exists()  # an instructions file already exists
+    assert not (repo / ".github/agents").exists() and not (repo / ".github/prompts").exists()  # v0.1 files are gone
+    assert "harness: copilot" in (repo / ".semipilot/config.yaml").read_text()
+    assert (repo / ".agents/skills/semipilot-knowledge/scripts/kb.py").exists()
     (repo / ".semipilot/config.yaml").write_text("checks: []\n")
     init(repo)
     assert (repo / ".semipilot/config.yaml").read_text() == "checks: []\n"  # re-run is a no-op
+
+
+def test_init_for_claude_code(tmp_path):
+    repo = mkrepo(tmp_path, {"package.json": json.dumps({"scripts": {"test": "jest", "build": "tsc"}, "devDependencies": {"jest": "29"}})})
+    d, report, info = init(repo, harness="claude-code")
+    assert info["harness"] == "claude"
+    assert all((repo / ".claude/skills" / n / "SKILL.md").exists() for n in SKILL_NAMES)
+    assert not (repo / ".agents").exists()
+    agents = (repo / "AGENTS.md").read_text()  # no instructions file yet → AGENTS.md, read by Claude Code and Copilot
+    assert "npx jest" in agents and "{{TODO" in agents and "{{BUILD}}" not in agents
+    assert not (repo / "CLAUDE.md").exists()  # Claude Code reads AGENTS.md when there is no CLAUDE.md
+
+
+def test_init_claude_with_only_copilot_instructions_gets_a_claude_md_pointer(tmp_path):
+    repo = mkrepo(tmp_path, {".github/copilot-instructions.md": "# ours\n"})
+    init(repo, harness="claude")
+    assert (repo / "CLAUDE.md").read_text().strip() == "@.github/copilot-instructions.md"
+
+
+def test_init_skills_for_both_chats_and_switching_harness(tmp_path):
+    repo = mkrepo(tmp_path, {"pyproject.toml": ""})
+    d, report, info = init(repo, harness="copilot", skills_for=["copilot", "claude"])
+    assert (repo / ".agents/skills/semipilot-refine/SKILL.md").exists() and (repo / ".claude/skills/semipilot-refine/SKILL.md").exists()
+    assert any("twice" in n for n in info["notes"])
+    d, report, info = init(repo, harness="claude")  # existing config: only the harness line changes
+    assert "harness: claude" in (repo / ".semipilot/config.yaml").read_text()
+    assert ("update", repo / ".semipilot/config.yaml") in report
+
+
+def test_init_notes_legacy_v01_files(tmp_path):
+    repo = mkrepo(tmp_path, {".github/agents/pilotinloop-planner.agent.md": "x", ".github/prompts/refine-requirements.prompt.md": "x"})
+    d, report, info = init(repo, harness="copilot")
+    assert any("pilotinloop-planner.agent.md is no longer used" in n for n in info["notes"])
+    assert (repo / ".github/agents/pilotinloop-planner.agent.md").exists()  # noted, never deleted
 
 
 def test_cli_init_and_status(tmp_path, capsys):
@@ -86,11 +122,35 @@ def test_init_here_and_root_discovery_in_a_subfolder(tmp_path, capsys, monkeypat
     assert main(["init", "--here"]) == 0
     out = capsys.readouterr().out
     assert "semipilot init → api" in out
-    assert (api / ".semipilot" / "config.yaml").exists() and (api / ".github" / "agents" / "refiner.agent.md").exists()
-    assert not (repo / ".semipilot").exists() and not (repo / ".github").exists()
+    assert (api / ".semipilot" / "config.yaml").exists()
+    assert any((api / d / "semipilot-refine" / "SKILL.md").exists() for d in (".agents/skills", ".claude/skills"))
+    assert not (repo / ".semipilot").exists() and not (repo / ".agents").exists() and not (repo / ".claude").exists()
     # after init: found from anywhere inside the project, and the git root is still not it
     (api / "src").mkdir()
     assert find_repo(api / "src") == api
     assert find_repo(repo / "apps" / "web") == repo
     monkeypatch.chdir(api / "src")
     assert main(["status"]) == 0
+
+
+def test_rerun_refreshes_skills_from_another_version_but_never_the_config(tmp_path):
+    repo = mkrepo(tmp_path, {"pyproject.toml": ""})
+    init(repo, harness="claude")
+    skill = repo / ".claude/skills/semipilot-refine/SKILL.md"
+    skill.write_text(skill.read_text().replace('version: "0.2.0"', 'version: "0.1.9"'))
+    (repo / ".semipilot/config.yaml").write_text("harness: claude\nchecks: [{name: t, cmd: x}]\n")
+    d, report, info = init(repo, force=True)
+    assert ("update", repo / ".claude/skills/semipilot-refine") in report
+    assert 'version: "0.2.0"' in skill.read_text()
+    assert (repo / ".semipilot/config.yaml").read_text() == "harness: claude\nchecks: [{name: t, cmd: x}]\n"
+    d, report, info = init(repo)
+    assert ("skip", repo / ".claude/skills/semipilot-refine") in report  # current version: kept
+
+
+def test_init_never_downgrades_newer_skills(tmp_path):
+    repo = mkrepo(tmp_path, {"pyproject.toml": ""})
+    init(repo, harness="claude")
+    skill = repo / ".claude/skills/semipilot-run/SKILL.md"
+    skill.write_text(skill.read_text().replace('version: "0.2.0"', 'version: "0.3.0"'))
+    d, report, info = init(repo)
+    assert ("skip", repo / ".claude/skills/semipilot-run") in report and 'version: "0.3.0"' in skill.read_text()

@@ -5,10 +5,10 @@ Humans sit at the front (requirements, Gate 1 approval, answered questions) and 
 
 Layout inside a repo (see config.Layout):
     .semipilot/config.yaml                 the only file a user edits
-    .semipilot/features/<slug>/requirements.md        written by /refine-requirements (@refiner), approved after
-                                                      /spec-critic (frontmatter status: approved) — the human gate
+    .semipilot/features/<slug>/requirements.md        written by the semipilot-refine skill, approved after the
+                                                      semipilot-spec-critic skill (status: approved) — the human gate
     .semipilot/features/<slug>/open-questions.md      planner's questions, answered inline by the human
-    .semipilot/features/<slug>/implementation-plan.md the accepted plan, rendered for humans and for @scribe
+    .semipilot/features/<slug>/implementation-plan.md the accepted plan, rendered for humans and for semipilot-scribe
     .semipilot/features/<slug>/decisions.md           assumptions the loop made (read these first)
     .semipilot/features/<slug>/rejection-log.md       critic rejections
     .semipilot/features/<slug>/report.md              the report
@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -31,8 +32,14 @@ from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-from .config import Layout, knowledge_layer_present
-from .runner import OK, CopilotRunner, HaltRun
+from .config import INSTRUCTION_CANDIDATES, Layout, instructions_file, kb_commands, knowledge_layer_present
+from .harness import UnknownHarnessError, get_harness
+from .runner import AGENT_UNAVAILABLE, OK, HaltRun, Runner
+
+LEGACY_AGENT_UNAVAILABLE = "copilot_unavailable"  # stop reason written by v0.1
+ROLE_FOR = {"planner-questions": "planner", "planner-plan": "planner", "spec-critic": "spec-critic",
+            "plan-critic": "plan-critic"}
+TASK_HEADING = "# Your task"
 
 
 class PreflightError(Exception):
@@ -159,14 +166,18 @@ class Git:
             self.run("reset", "-q", "--", *[e.rstrip("/") for e in existing])
         if not self.run("diff", "--cached", "--name-only").strip():
             return self.head()
-        self.run("commit", "-q", "-m", message)
+        self.run("commit", "-q", "--no-verify", "-m", message)
         return self.head()
 
     def revert(self, sha: str) -> bool:
-        r = subprocess.run(["git", "revert", "--no-edit", sha], cwd=self.repo, capture_output=True, text=True)
+        # `git revert` cannot skip hooks, so revert without committing and commit with --no-verify (the project's
+        # pre-commit hook may reject intermediate states the loop is undoing; CI still checks the branch).
+        subject = self.run("log", "-1", "--format=%s", sha).strip()
+        r = subprocess.run(["git", "revert", "--no-edit", "--no-commit", sha], cwd=self.repo, capture_output=True, text=True)
         if r.returncode != 0:
             subprocess.run(["git", "revert", "--abort"], cwd=self.repo, capture_output=True)
             return False
+        self.run("commit", "-q", "--no-verify", "-m", f'Revert "{subject}"\n\nThis reverts commit {sha}.')
         return True
 
     def stat_between(self, a: str, b: str) -> dict:
@@ -261,8 +272,11 @@ def parse_frontmatter(text: str) -> dict:
         return {}
     out = {}
     for line in m.group(1).splitlines():
-        if ":" in line:
+        if ":" in line and not line.lstrip().startswith("#"):
             k, v = line.split(":", 1)
+            v = v.strip()
+            if not v.startswith(("'", '"')):
+                v = re.sub(r"\s+#.*$", "", v)  # YAML comment: `status: approved   # set by the spec critic`
             out[k.strip()] = v.strip().strip('"').strip("'")
     return out
 
@@ -307,6 +321,14 @@ def parse_questions(text: str) -> tuple[int, int]:
                     answered += 1
                 break
     return len(blocks), answered
+
+
+def blocked_question(text: str) -> Optional[str]:
+    """The question when an agent's answer ends with `BLOCKED: <question>` (the assumptions protocol), else None."""
+    lines = [l.strip() for l in (text or "").strip().splitlines() if l.strip()]
+    if lines and lines[-1].upper().startswith("BLOCKED:"):
+        return lines[-1].split(":", 1)[1].strip() or "(no question given)"
+    return None
 
 
 # =============================================================================== checks
@@ -392,14 +414,29 @@ def load_prompt(name: str, override_dir: Optional[Path] = None) -> str:
     return resources.files("semipilot").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
 
 
-def render_prompt(name: str, override_dir: Optional[Path] = None, **kw) -> str:
-    template = load_prompt(name, override_dir)
+def load_role(name: str, override_dir: Optional[Path] = None) -> str:
+    if override_dir and (override_dir / f"{name}.md").exists():
+        return (override_dir / f"{name}.md").read_text(encoding="utf-8")
+    return resources.files("semipilot").joinpath("roles", f"{name}.md").read_text(encoding="utf-8")
 
-    class Safe(dict):
-        def __missing__(self, k):
-            return "{" + k + "}"
 
-    return template.format_map(Safe(**{k: (v if isinstance(v, str) else json.dumps(v, indent=2)) for k, v in kw.items()}))
+class _Safe(dict):
+    def __missing__(self, k):
+        return "{" + k + "}"
+
+
+def _fill(template: str, kw: dict) -> str:
+    return template.format_map(_Safe(**{k: (v if isinstance(v, str) else json.dumps(v, indent=2)) for k, v in kw.items()}))
+
+
+def render_prompt(name: str, override_dir: Optional[Path] = None, role: Optional[str] = None,
+                  role_dir: Optional[Path] = None, **kw) -> str:
+    """The text of one loop call. With a role, the role definition comes first and the task follows under
+    `# Your task` — the same prompt on every harness, no harness-specific agent files involved."""
+    task = _fill(load_prompt(name, override_dir), kw)
+    if not role:
+        return task
+    return f"{_fill(load_role(role, role_dir), kw).rstrip()}\n\n---\n\n{TASK_HEADING}\n\n{task}"
 
 
 # =============================================================================== progress
@@ -454,7 +491,9 @@ class Loop:
         self.questions_rel = self.lay.rel(self.questions_path)
         self.decisions_rel = self.lay.rel(self.decisions_path)
         self.kl = knowledge_layer_present(self.repo, cfg)
-        self.runner: Optional[CopilotRunner] = None
+        self.kb_validate_cmd, self.kb_resolve_cmd = kb_commands(self.repo, cfg)
+        self._resolved: Optional[str] = None
+        self.runner: Optional[Runner] = None
         self.progress: Optional[Progress] = None
         self.plan: Optional[dict] = None
         self.lock = TestLock(self.repo, cfg["tests"]["patterns"])
@@ -476,19 +515,46 @@ class Loop:
     def is_managed(self, path: str) -> bool:
         return any(path == m or path.startswith(m) for m in self.managed())
 
-    def make_runner(self) -> CopilotRunner:
-        self.runner = CopilotRunner(self.cfg, self.run_dir(), sleep_fn=self.sleep, cwd=self.repo,
-                                    reset_tree_fn=lambda: self.reset_tree("infra failure"))
+    def make_runner(self) -> Runner:
+        carried = self.runner.cost_usd if self.runner else 0.0  # preflight calls count toward the run's cost
+        self.runner = Runner(self.cfg, self.run_dir(), sleep_fn=self.sleep, cwd=self.repo,
+                             reset_tree_fn=lambda: self.reset_tree("infra failure"))
+        self.runner.cost_usd = carried
         return self.runner
 
+    def instructions(self) -> tuple[str, str]:
+        """(main instructions file, the list of instruction files to name in prompts)."""
+        main = instructions_file(self.repo, self.cfg)
+        present = [c for c in (main, *INSTRUCTION_CANDIDATES) if (self.repo / c).exists()]
+        present = list(dict.fromkeys(present)) or [main]
+        return main, ", ".join(f"`{c}`" for c in present)
+
     def prompt(self, name: str, **kw) -> str:
-        return render_prompt(name, self.lay.custom_prompts, **kw)
+        main, listed = self.instructions()
+        kw.setdefault("instructions_file", f"`{main}`")
+        kw.setdefault("instructions", listed)
+        return render_prompt(name, self.lay.custom_prompts, role=ROLE_FOR.get(name), role_dir=self.lay.custom_roles, **kw)
+
+    def guard_branch(self, who: str) -> None:
+        """Agents may not switch branches (the deny rules say so); verify it after every writing call."""
+        if self.progress and self.progress.branch and self.git.current_branch() != self.progress.branch:
+            now = self.git.current_branch()
+            try:
+                self.git.checkout(self.progress.branch)
+                back = f"switched back to {self.progress.branch}"
+            except RuntimeError as e:
+                back = f"could not switch back to {self.progress.branch} ({e}); do it by hand before `semipilot resume`"
+            raise HaltRun("guardrail_violation", f"{who} switched the branch to {now}; {back}")
 
     def last_good_commit(self) -> str:
         done = [t["commit"] for t in self.progress.tasks if t["status"] == "done" and t.get("commit")]
         return done[-1] if done else (self.progress.tests_commit or self.progress.base_commit)
 
     def reset_tree(self, why: str) -> None:
+        if self.progress and self.progress.branch and self.git.branch_exists(self.progress.branch) \
+                and self.git.current_branch() != self.progress.branch:
+            # never hard-reset whatever branch an agent switched to (it may be main): switch back and halt instead
+            self.guard_branch(f"an agent (before a tree reset for: {why})")
         sha = self.last_good_commit()
         discarded = self.git.reset_hard(sha, preserve=self.managed())
         if discarded:
@@ -502,6 +568,10 @@ class Loop:
         self.progress.budget["elapsed_min"] = round(self.elapsed_min(), 1)
         if self.runner:
             self.progress.infra = self.runner.outage.summary()
+            self.progress.infra["harness"] = self.runner.harness.name
+            if self.runner.cost_usd:
+                before = float(self.progress.budget.get("cost_usd_before_resume", 0))
+                self.progress.budget["cost_usd"] = round(before + self.runner.cost_usd, 4)
         self.progress.test_lock = self.lock.to_json()
         self.progress.save(self.progress_path)
         self.lay.last_run.write_text(self.feature + "\n", encoding="utf-8")
@@ -563,12 +633,13 @@ class Loop:
     # ------------------------------------------------------------------ preflight
     def check_spec(self) -> list[dict]:
         if not self.spec_path.exists():
-            raise PreflightError(f"{self.spec_rel} not found. In Copilot chat run `/refine-requirements <your idea>`, then `/spec-critic`.")
+            raise PreflightError(f"{self.spec_rel} not found. In your agent's chat run `/semipilot-refine <your idea>`, "
+                                 "then `/semipilot-spec-critic`.")
         text = self.spec_text()
         fm = parse_frontmatter(text)
         if str(fm.get("status", "")).lower() != "approved":
-            raise PreflightError(f"{self.spec_rel} is not approved. Run `/spec-critic` in Copilot chat and reply `approve` "
-                                 "(or set `status: approved` in its frontmatter yourself).")
+            raise PreflightError(f"{self.spec_rel} is not approved. Run `/semipilot-spec-critic` in your agent's chat and "
+                                 "reply `approve` (or set `status: approved` in its frontmatter yourself).")
         crit, untagged = parse_acceptance_criteria(text, self.cfg["preflight"]["criterion_tag_regex"])
         if untagged:
             raise PreflightError("acceptance criteria without a machine-checkable [check: ...] tag:\n  - "
@@ -580,44 +651,71 @@ class Loop:
     def check_knowledge_layer(self) -> None:
         if not self.kl:
             return
-        cmd = self.cfg["knowledge_layer"]["validate_cmd"]
+        cmd = self.kb_validate_cmd
         r = subprocess.run(cmd, shell=True, cwd=self.repo, capture_output=True, text=True)
         if r.returncode != 0:
             raise PreflightError(f"knowledge layer unhealthy (`{cmd}` failed) — fix the cards before a run:\n{(r.stdout + r.stderr)[-1500:]}")
         self.log("knowledge layer healthy")
+        if self.tags():
+            self.resolved_knowledge()  # unknown tags fail here, before anything is spent
+            self.log(f"knowledge resolved for tags {', '.join(self.tags())}")
+
+    def resolved_knowledge(self) -> str:
+        """The reading list for the requirements' tags, resolved once per run by the orchestrator (deterministic, and
+        no agent needs shell access to retrieve knowledge)."""
+        if self._resolved is None:
+            cmd = self.kb_resolve_cmd.replace("{tags}", shlex.quote(",".join(self.tags())))
+            r = subprocess.run(cmd, shell=True, cwd=self.repo, capture_output=True, text=True)
+            if r.returncode != 0:
+                raise PreflightError(f"knowledge layer: `{cmd}` failed — fix the tags under Knowledge References in "
+                                     f"{self.spec_rel} or the cards:\n{(r.stdout + r.stderr)[-1500:]}")
+            self._resolved = r.stdout.strip()
+        return self._resolved
 
     def tags(self) -> list[str]:
         """Tags from `requirements.md > Knowledge References > Tags:` — the retrieval key for the knowledge layer."""
         m = re.search(r"^\s*[-*]?\s*\**Tags\**\s*:\s*(.+)$", self.spec_text(), re.MULTILINE | re.IGNORECASE)
         if not m:
             return []
-        return [t.strip().strip("`") for t in re.split(r"[,\s]+", m.group(1)) if t.strip().strip("`")]
+        tags = [t.strip().strip("`*_") for t in re.split(r"[,\s]+", m.group(1))]
+        tags = [t for t in tags if t]
+        bad = [t for t in tags if not re.fullmatch(r"[a-z0-9-]+", t)]
+        if bad:  # tags reach a shell command line: only the vocabulary's own alphabet is accepted
+            raise PreflightError(f"invalid knowledge tag(s) {', '.join(repr(b) for b in bad)} under Knowledge References in "
+                                 f"{self.spec_rel}: tags are lowercase letters, digits and hyphens")
+        return tags
 
     def kl_context(self) -> dict:
-        """Prompt variables describing how to retrieve module knowledge."""
+        """Prompt variables describing where module knowledge comes from. With a knowledge layer the orchestrator
+        has already resolved the requirements' tags; the agent gets the exact reading list, not a command to run."""
+        _, listed = self.instructions()
+        protected = (f"Never modify `docs/cards/`, {listed}, `AGENTS.md`, `CLAUDE.md` or `.github/instructions/` — the "
+                     "semipilot-scribe skill does that after the human review.")
         if self.kl:
             tags = self.tags()
-            resolve = self.cfg["knowledge_layer"]["resolve_cmd"].replace("{tags}", ",".join(tags) or "<tags>")
-            return {"knowledge": (
-                "This repository has a knowledge layer. Module knowledge comes from it, not from grepping: run "
-                f"`{resolve}` and read ONLY the cards (and the deep docs they link) it returns; open code only inside "
-                "those cards' `code:` paths. Honor every card's `invariants:` and `public_contracts:`. Never modify "
-                "`docs/cards/`, `AGENTS.md`, `.github/copilot-instructions.md` or `.github/instructions/` — `@scribe` "
-                "does that after the human review."
-                + ("" if tags else " (requirements.md lists no tags under Knowledge References — pick 1–4 from "
-                   "`docs/cards/_vocabulary.md` yourself and say which.)")),
-                "knowledge_updates_rule": (
-                    "Also output `knowledge_updates`: one line per card owning a changed file (`docs/cards/<card>.md: "
-                    "<delta or 'no change'>`), plus `.github/instructions/<area>.instructions.md`, `docs/decisions.md` "
-                    "(ADR title or 'no change'), `docs/dependencies.md`, and the `docs/CHANGELOG.md` line. "
-                    "@scribe executes this list after the human review; the loop never touches those files.")}
+            if tags:
+                where = ("This repository has a knowledge layer. Module knowledge comes from it, not from searching the "
+                         f"codebase. The orchestrator resolved the requirements' tags ({', '.join(tags)}); read ONLY the "
+                         "cards (L1) below and the deep docs (L2) a card points you to, and open code only inside the "
+                         "listed code paths (L3):\n\n```\n" + self.resolved_knowledge() + "\n```\n\n")
+            else:
+                where = ("This repository has a knowledge layer, but the requirements list no tags under Knowledge "
+                         "References: read `docs/cards/_vocabulary.md`, pick the 1–4 matching tags, read the cards "
+                         "that own them (`docs/cards/*.md`, `owns:`) and say which tags you used. ")
+            return {"knowledge": where + "Honor every card's `invariants:` and `public_contracts:`. " + protected,
+                    "knowledge_updates_rule": (
+                        "Also output `knowledge_updates`: one line per card owning a changed file (`docs/cards/<card>.md: "
+                        "<delta or 'no change'>`), plus `.github/instructions/<area>.instructions.md`, `docs/decisions.md` "
+                        "(ADR title or 'no change'), `docs/dependencies.md`, and the `docs/CHANGELOG.md` line. "
+                        "The semipilot-scribe skill executes this list after the human review; the loop never touches "
+                        "those files.")}
         return {"knowledge": (
-            "Follow the repository's instructions: `.github/copilot-instructions.md`, `AGENTS.md`, and any "
-            "`.github/instructions/*.instructions.md` whose `applyTo` matches the files involved. Never modify them."),
+            f"Follow the repository's instructions: {listed}, and any `.github/instructions/*.instructions.md` whose "
+            "`applyTo` matches the files involved. " + protected),
             "knowledge_updates_rule": "`knowledge_updates` may be omitted (no knowledge layer in this repository)."}
 
     def render_implementation_plan(self) -> None:
-        """implementation-plan.md: the plan in the manual pipeline's vocabulary, for the human and for @scribe."""
+        """implementation-plan.md: the plan in the manual pipeline's vocabulary, for the human and for semipilot-scribe."""
         if not self.plan:
             return
         L = [f"# Implementation Plan — {self.feature}", "",
@@ -632,12 +730,16 @@ class Loop:
                 L += ["- Interfaces:"] + [f"  - `{i}`" for i in t["interfaces"]]
             L += [""]
         L += ["## Knowledge Updates Required", "",
-              "What `@scribe` must update after the human review (the loop never touches these files):", ""]
+              "What the semipilot-scribe skill must update after the human review (the loop never touches these files):", ""]
         L += [f"- {k}" for k in self.plan.get("knowledge_updates") or []] or ["- (planner listed none" + (" — check the cards owning the changed files)" if self.kl else ")")]
         L += [""]
         self.lay.implementation_plan(self.feature).write_text("\n".join(L), encoding="utf-8")
 
     def check_config(self) -> None:
+        try:
+            get_harness(self.cfg)
+        except UnknownHarnessError as e:
+            raise PreflightError(f"{e} (set `harness:` in .semipilot/config.yaml)")
         if not self.cfg.get("checks"):
             raise PreflightError("no `checks` configured in .semipilot/config.yaml (run `semipilot init`, then edit)")
         for chk in self.cfg["checks"]:
@@ -651,7 +753,7 @@ class Loop:
         dirty = self.git.status_paths()
         if dirty and all(f.startswith(feat_rel) or f.startswith(self.lay.rel(self.lay.root) + "/.gitignore") for f in dirty):
             self.git.run("add", "-A", "--", feat_rel, self.lay.rel(self.lay.root / ".gitignore"))
-            self.git.run("commit", "-q", "-m", self.commit_message(what, kind="docs"))
+            self.git.run("commit", "-q", "--no-verify", "-m", self.commit_message(what, kind="docs"))
             self.log(f"committed {feat_rel} ({what})")
 
     def check_tree(self, stack: bool = False) -> None:
@@ -672,17 +774,19 @@ class Loop:
             raise PreflightError("detached HEAD; check out the branch the feature should be built on")
         self.log(f"base: {base} @ {self.git.head()[:10]} → the run will create {self.branch_name()} from here")
 
-    def check_copilot(self) -> None:
+    def check_agent(self) -> None:
+        h = self.runner.harness
         res = self.runner.invoke("health", self.cfg["preflight"]["health_prompt"], "health")
         if res.kind != OK:
-            raise PreflightError(f"Copilot CLI health check failed ({res.kind}, exit {res.exit_code}). Run `copilot login`?\n{res.combined[-1500:]}")
+            raise PreflightError(f"{h.label} health check failed ({res.kind}, exit {res.exit_code}). "
+                                 f"Logged in? ({h.login_hint})\n{res.combined.strip()[-1500:]}")
         pf = self.cfg["preflight"]
         if pf.get("auth_check_cmd"):
             r = subprocess.run(pf["auth_check_cmd"], shell=True, cwd=self.repo, capture_output=True, text=True)
             if r.returncode != 0:
                 raise PreflightError(f"auth check `{pf['auth_check_cmd']}` failed:\n{(r.stdout + r.stderr)[-1500:]}")
-        exp_env = pf.get("token_expiry_env")
-        if exp_env and os.environ.get(exp_env):
+        exp_env = next((e for e in (pf.get("token_expiry_env"), "COPILOT_TOKEN_EXPIRES_AT") if e and os.environ.get(e)), None)
+        if exp_env:
             expires = dt.datetime.fromisoformat(os.environ[exp_env])
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=dt.timezone.utc)
@@ -694,7 +798,7 @@ class Loop:
         """Questions-only planner pass. Writes questions.md; returns the number of questions."""
         prompt = self.prompt("planner-questions", feature=self.feature, spec_path=self.spec_rel, criteria=crit, **self.kl_context())
         res = self.runner.run("planner", prompt, "planner-questions")
-        text = res.stdout.strip() + "\n"
+        text = res.text.strip() + "\n"
         self.questions_path.parent.mkdir(parents=True, exist_ok=True)
         self.questions_path.write_text(text, encoding="utf-8")
         n, _ = parse_questions(text)
@@ -718,8 +822,8 @@ class Loop:
         self.progress = Progress(run_id=pre_id, feature=self.feature, branch=self.branch_name(),
                                  started_at=self.now().isoformat(), base_commit=self.git.head())
         self.make_runner()
-        self.check_copilot()
-        self.log("Copilot CLI OK")
+        self.check_agent()
+        self.log(f"{self.runner.harness.label} OK")
 
         if not skip_questions:
             if self.questions_path.exists():
@@ -757,12 +861,16 @@ class Loop:
             self.stage_plan(crit)
             self.stage_tests(crit)
             self.stage_implement()
-            self.progress.stop_reason = self.progress.stop_reason or "completed"
+            self.progress.stop_reason = self.progress.stop_reason or self.end_reason()
         except HaltRun as h:
             self.on_halt(h)
         finally:
             self.finish()
         return self.progress.stop_reason
+
+    def end_reason(self) -> str:
+        """`completed` only when every task is done; tasks left blocked make it `completed_with_blocked`."""
+        return "completed" if all(t["status"] == "done" for t in self.progress.tasks) else "completed_with_blocked"
 
     def on_halt(self, h: HaltRun) -> None:
         self.progress.stop_reason, self.progress.stop_detail = h.reason, h.detail
@@ -781,25 +889,34 @@ class Loop:
         if self.git.current_branch() != self.progress.branch:
             self.git.checkout(self.progress.branch)
         self.progress.budget["elapsed_min_before_resume"] = self.progress.budget.get("elapsed_min", 0)
+        self.progress.budget["cost_usd_before_resume"] = self.progress.budget.get("cost_usd", 0)
+        self.t_start = time.monotonic()  # an automatic resume after a retry window must not count the sleep
         self.progress.stop_reason = None
         self.lock.from_json(self.progress.test_lock)
         plan_path = self.sdir() / "plan.json"
-        if not plan_path.exists():
-            copy = self.lay.plan_json(self.feature)
-            if copy.exists():
-                plan_path.write_text(copy.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
-                raise PreflightError(f"plan.json missing at {plan_path}")
-        self.plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if not plan_path.exists() and self.lay.plan_json(self.feature).exists():
+            plan_path.write_text(self.lay.plan_json(self.feature).read_text(encoding="utf-8"), encoding="utf-8")
+        self.plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else None
+        if self.plan is None and self.progress.tasks:
+            raise PreflightError(f"plan.json missing at {plan_path} and in {self.lay.rel(self.lay.feature_dir(self.feature))}")
         self.make_runner()
         if self.git.is_dirty():
             self.reset_tree("resume with dirty tree")
         for t in self.progress.tasks:
             if t["status"] == "in_progress":
                 t["status"] = "pending"
+            elif t["status"] == "blocked":
+                # resume after answering the question / fixing the cause: the task gets a fresh set of attempts
+                t.update({"status": "pending", "attempts": 0, "blocked_reason": None, "contract_fixes": 0,
+                          "scope_violations": 0})
         try:
+            crit = self.criteria()
+            if self.plan is None:  # halted while planning (outage, quota, BLOCKED:): plan again
+                self.stage_plan(crit)
+            if self.progress.tests_commit is None:  # halted before the tests were locked: write them now
+                self.stage_tests(crit)
             self.stage_implement()
-            self.progress.stop_reason = self.progress.stop_reason or "completed"
+            self.progress.stop_reason = self.progress.stop_reason or self.end_reason()
         except HaltRun as h:
             self.on_halt(h)
         finally:
@@ -818,16 +935,19 @@ class Loop:
         self.maybe_schedule_retry()
 
     def commit_state(self) -> None:
+        if self.progress.branch and self.git.branch_exists(self.progress.branch) and self.git.current_branch() != self.progress.branch:
+            self.log(f"not committing run state: {self.git.current_branch()} is checked out, not {self.progress.branch}")
+            return
         self.ensure_gitignore()
         paths = [m for m in self.managed() if (self.repo / m.rstrip("/")).exists() and not m.endswith("runs/")]
         paths.append(self.lay.rel(self.lay.root / ".gitignore"))
         self.git.run("add", "-A", "--", *paths)
         if self.git.run("diff", "--cached", "--name-only").strip():
-            self.git.run("commit", "-q", "-m", self.commit_message(f"run state ({self.progress.stop_reason or 'update'})", kind="chore"))
+            self.git.run("commit", "-q", "--no-verify", "-m", self.commit_message(f"run state ({self.progress.stop_reason or 'update'})", kind="chore"))
 
     def maybe_schedule_retry(self) -> None:
         win = self.cfg["infra"].get("retry_window")
-        if not win or self.progress.stop_reason != "copilot_unavailable":
+        if not win or self.progress.stop_reason not in (AGENT_UNAVAILABLE, LEGACY_AGENT_UNAVAILABLE):
             return
         hh, mm = (int(x) for x in win.split(":"))
         now = self.now().astimezone()
@@ -869,7 +989,10 @@ class Loop:
                                  questions_path=self.questions_rel, criteria=crit, rejections=rejections or "(none)",
                                  max_files=self.cfg["guardrails"]["max_expected_files_per_task"], **self.kl_context())
             res = self.runner.run("planner", prompt, f"planner-plan-{attempt}")
-            plan = CopilotRunner.extract_json(res.stdout)
+            q = blocked_question(res.text)
+            if q:
+                raise HaltRun("blocked", f"the planner needs an answer: {q}")
+            plan = Runner.extract_json(res.text)
             errors = validate_plan(plan, self.cfg, crit) if plan else ["no JSON object found in planner output"]
             if not errors:
                 return plan
@@ -883,7 +1006,7 @@ class Loop:
             prompt = self.prompt(critic, plan_json=plan, spec_path=self.spec_rel, questions_path=self.questions_rel,
                                  max_files=self.cfg["guardrails"]["max_expected_files_per_task"], **self.kl_context())
             res = self.runner.run(critic, prompt, f"{critic}-round{rnd + 1}")
-            v = CopilotRunner.extract_json(res.stdout) or {"verdict": "reject", "issues": ["critic returned no JSON verdict"]}
+            v = Runner.extract_json(res.text) or {"verdict": "reject", "issues": ["critic returned no JSON verdict"]}
             v.setdefault("issues", [])
             v["critic"] = critic
             out.append(v)
@@ -907,7 +1030,12 @@ class Loop:
                              plan_tasks=[{k: t[k] for k in ("id", "title", "expected_files", "acceptance_checks", "interfaces") if k in t}
                                          for t in self.plan["tasks"]],
                              test_patterns=self.cfg["tests"]["patterns"], **self.kl_context())
-        self.runner.run("test-writer", prompt, "test-writer")
+        res = self.runner.run("test-writer", prompt, "test-writer")
+        self.guard_branch("the test-writer")
+        q = blocked_question(res.text)
+        if q:
+            self.reset_tree("test-writer blocked")
+            raise HaltRun("blocked", f"the test-writer needs an answer: {q}")
         changed = [f for f in self.git.changed_files(self.progress.base_commit) if not self.is_managed(f)]
         non_test = [f for f in changed if not self.lock.matches(f)]
         if non_test:
@@ -972,6 +1100,12 @@ class Loop:
                                  **self.kl_context())
             res = self.runner.run("implementer", prompt, label)
             self.save()
+            self.guard_branch(f"the implementer ({task['id']})")
+            q = blocked_question(res.text)
+            if q:
+                self.reset_tree(f"{task['id']} blocked by a question")
+                self.mark(entry, "blocked", f"BLOCKED: {q}")
+                return
             if res.timed_out:
                 self.reset_tree(f"{task['id']} call timeout")
                 last_errors = "previous attempt timed out"
@@ -1033,6 +1167,7 @@ class Loop:
         before = dict(self.lock.checksums)
         prompt = self.prompt("test-fixer", task_json=task, errors=errors, locked_tests=sorted(before), decisions_path=self.decisions_rel)
         self.runner.run("test-fixer", prompt, f"{task['id']}-testfix")
+        self.guard_branch(f"the test-fixer ({task['id']})")
         impl_files = set(task["expected_files"])
         changed = [f for f in self.git.changed_files(self.last_good_commit()) if not self.is_managed(f)]
         bad = [f for f in changed if f not in before and f not in impl_files and not self.lock.matches(f)]
@@ -1161,10 +1296,13 @@ class Loop:
         L += ["", "## 5. Diff stats"]
         L += [f"- {t['id']}: {t['diff']['files']} files, +{t['diff']['added']}/-{t['diff']['removed']}" for t in done if t.get("diff")] or ["_None._"]
         b = p.budget
-        L += ["", "## 6. Budget", f"- Copilot calls for implementation: {b.get('iterations_used', 0)} / {self.cfg['budget']['max_iterations']}",
+        L += ["", "## 6. Budget", f"- Agent calls for implementation: {b.get('iterations_used', 0)} / {self.cfg['budget']['max_iterations']}",
               f"- Wall-clock: {b.get('elapsed_min', 0)} min / {self.cfg['budget']['wall_clock_seconds'] // 60} min"]
+        if b.get("cost_usd"):
+            L += [f"- Cost reported by the harness: ${b['cost_usd']:.2f} (all loop calls)"]
         i = p.infra or {}
-        L += ["", "## 7. Infrastructure", f"- Transient Copilot failures: {i.get('transient_failures', 0)}",
+        L += ["", "## 7. Infrastructure", f"- Harness: {i.get('harness', '?')}",
+              f"- Transient agent failures: {i.get('transient_failures', 0)}",
               f"- Time lost to outages: {i.get('total_outage_minutes', 0)} min", f"- Circuit breaker tripped: {i.get('breaker_tripped', False)}"]
         L += ["", "## 8. Critic rejections"]
         rej = [(c["round"], v) for c in p.critique for v in c["verdicts"] if v["verdict"] != "accept"]
@@ -1173,7 +1311,7 @@ class Loop:
         L += ["", "## 10. Next steps", "",
               f"- Wrong assumption? `semipilot rollback {p.feature} T<n>` then fix the spec and `semipilot resume {p.feature}`",
               f"- Blocked or interrupted? answer in the spec / decisions, then `semipilot resume {p.feature}`",
-              "- Happy? review the diff" + (", run `@scribe` with implementation-plan.md (cards, ADRs, changelog)" if self.kl else "")
+              "- Happy? review the diff" + (", run the semipilot-scribe skill with implementation-plan.md (cards, ADRs, changelog)" if self.kl else "")
               + ", then open the PR yourself (the loop never pushes). Draft below.", ""]
         L += ["## 11. PR description draft", "", f"### {p.feature}", ""]
         if self.plan:

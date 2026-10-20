@@ -1,9 +1,11 @@
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 
 from semipilot import orchestrator as orch
-from conftest import ADD_BAD, ADD_OK, MUL_OK, PLAN, QUESTIONS, SPEC, TEST_FILE_GOOD, TEST_FILE_MUL, step, write
+from conftest import task_of, ADD_BAD, ADD_OK, MUL_OK, PLAN, QUESTIONS, SPEC, TEST_FILE_GOOD, TEST_FILE_MUL, step, write
 
 
 # ---------------------------------------------------------------- happy path
@@ -27,7 +29,7 @@ def test_happy_path_two_tasks(h):
     assert "Stop reason: **completed**" in rep and "T2" in rep and "PR description draft" in rep
     plan_md = (h.feat / "implementation-plan.md").read_text()
     assert "### T1 — add function" in plan_md and "Knowledge Updates Required" in plan_md
-    assert "@scribe" not in rep  # no knowledge layer → no scribe step
+    assert "semipilot-scribe" not in rep  # no knowledge layer → no scribe step
     impl_prompts = [c["prompt"] for c in h.calls() if "Implement **only task" in c["prompt"]]
     assert len(impl_prompts) == 2
     assert all("plan.json" not in pr for pr in impl_prompts)
@@ -58,7 +60,7 @@ def test_questions_stop_the_run_until_answered(h):
     assert reason == "completed"
     plan_prompt = next(c["prompt"] for c in h.calls() if "Output **only** a JSON object matching" in c["prompt"])
     assert "open-questions.md" in plan_prompt
-    assert sum(1 for c in h.calls() if "questions-only mode" in c["prompt"]) == 1  # not asked twice
+    assert sum(1 for c in h.calls() if "questions-only mode" in task_of(c["prompt"])) == 1  # not asked twice
 
 
 def test_uncommitted_answers_are_committed_for_you(h):
@@ -85,7 +87,7 @@ def test_no_questions_flag_skips_the_planner_question_pass(h):
     h.scenario(questions=[step(stdout=QUESTIONS)])
     o, reason = h.run(skip_questions=True)
     assert reason == "completed"
-    assert not any("questions-only mode" in c["prompt"] for c in h.calls())
+    assert not any("questions-only mode" in task_of(c["prompt"]) for c in h.calls())
 
 
 # ---------------------------------------------------------------- retry semantics
@@ -110,7 +112,7 @@ def test_stuck_detection_blocks_and_resets_tree(h):
     assert t1["status"] == "blocked" and t1["attempts"] == 2
     assert t2["status"] == "blocked" and "dependency T1" in t2["blocked_reason"]
     assert not (h.repo / "calc/add.py").exists()
-    assert reason == "completed"
+    assert reason == "completed_with_blocked"  # not "completed": tasks are left blocked
 
 
 def test_error_signature_ignores_line_numbers_and_paths():
@@ -123,22 +125,23 @@ def test_error_signature_ignores_line_numbers_and_paths():
 
 # ---------------------------------------------------------------- infra failures
 def test_502_never_marks_task_blocked(h):
-    h.scenario(implementer_t1=[step(exit=1, stderr="Error: 502 Bad Gateway"),
+    h.scenario(implementer_t1=[step(exit=1, stderr=h.err["transient"]),
                                step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])])
     o, reason = h.run()
     assert reason == "completed"
     t1 = h.task("T1")
     assert t1["status"] == "done" and t1["attempts"] == 1
     assert h.progress()["infra"]["transient_failures"] == 1
-    assert "Transient Copilot failures: 1" in h.report()
+    assert "Transient agent failures: 1" in h.report()
+    assert f"Harness: {h.harness}" in h.report()
 
 
 def test_breaker_leaves_task_pending_and_resume_finishes(h):
     h.cfg["infra"].update({"max_outage_seconds": 0.03, "backoff_start_seconds": 0.02, "backoff_cap_seconds": 0.02})
-    h.scenario(implementer_t1=[step(exit=1, stderr="503 Service Unavailable")] * 5 + [
+    h.scenario(implementer_t1=[step(exit=1, stderr=h.err["outage"])] * 5 + [
         step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])])
     o, reason = h.run()
-    assert reason == "copilot_unavailable"
+    assert reason == "agent_unavailable"
     assert h.task("T1")["status"] == "pending" and h.task("T2")["status"] == "pending"
     assert h.git("status", "--porcelain").strip() == ""
     h.cfg["infra"].update({"max_outage_seconds": 5400})
@@ -148,13 +151,13 @@ def test_breaker_leaves_task_pending_and_resume_finishes(h):
 
 
 def test_401_halts_immediately_with_auth_failure(h):
-    h.scenario(implementer_t1=[step(exit=1, stderr="HTTP 401 Unauthorized: bad credentials")])
+    h.scenario(implementer_t1=[step(exit=1, stderr=h.err["fatal"])])
     o, reason = h.run()
     assert reason == "auth_failure" and h.task("T1")["status"] == "pending" and h.sleeps == []
 
 
 def test_quota_exhaustion_halts_without_backoff(h):
-    h.scenario(implementer_t1=[step(exit=1, stderr="Copilot premium request quota exceeded for this billing period")])
+    h.scenario(implementer_t1=[step(exit=1, stderr=h.err["quota"])])
     o, reason = h.run()
     assert reason == "quota_exhausted" and h.sleeps == [] and h.task("T1")["status"] == "pending"
 
@@ -302,16 +305,16 @@ def test_unapproved_spec_refused(h):
     with pytest.raises(orch.PreflightError) as e:
         h.run()
     assert "not approved" in str(e.value)
-    assert not h.calls()  # no Copilot call before the cheap checks pass
+    assert not h.calls()  # no agent call before the cheap checks pass
 
 
-def test_missing_spec_points_to_the_prompts(h):
+def test_missing_spec_points_to_the_skills(h):
     (h.feat / "requirements.md").unlink()
     h.git("commit", "-qam", "rm")
     h.scenario()
     with pytest.raises(orch.PreflightError) as e:
         h.run()
-    assert "/refine-requirements" in str(e.value)
+    assert "/semipilot-refine" in str(e.value) and "/semipilot-spec-critic" in str(e.value)
 
 
 # ---------------------------------------------------------------- rollback
@@ -328,47 +331,92 @@ def test_rollback_reverts_task_and_dependents(h):
 
 
 # ---------------------------------------------------------------- knowledge layer integration
-def install_fake_kl(h, healthy=True):
+KB_PY = Path(__file__).resolve().parents[1] / "skills" / "semipilot-knowledge" / "scripts" / "kb.py"
+CARD = """---
+id: app.{slug}
+owns: [{tag}]
+code:
+  - {code}
+---
+{body}
+"""
+
+
+def install_kl(h, healthy=True, tags="calc, math"):
+    """A real (tiny) knowledge layer: vocabulary, two cards, scripts/kb/kb.py."""
     (h.repo / "docs/cards").mkdir(parents=True)
-    (h.repo / "docs/cards/_vocabulary.md").write_text("- `calc`\n")
+    (h.repo / "docs/cards/_vocabulary.md").write_text("# Vocabulary\n\n- `calc` — arithmetic\n- `math` — maths helpers\n")
+    (h.repo / "calc").mkdir()
+    (h.repo / "calc/README.md").write_text("calc package\n")
+    (h.repo / "NOTES.md").write_text("notes\n")
+    (h.repo / "docs/cards/calc.md").write_text(CARD.format(slug="calc", tag="calc", code="calc/", body="Arithmetic helpers." if healthy else ""))
+    (h.repo / "docs/cards/math.md").write_text(CARD.format(slug="math", tag="math", code="NOTES.md", body="Maths notes."))
     (h.repo / "scripts/kb").mkdir(parents=True)
-    (h.repo / "scripts/kb/kb-validate.mjs").write_text("process.exit(%d)" % (0 if healthy else 1))
-    (h.repo / "scripts/kb/kb-resolve.mjs").write_text("console.log('docs/cards/calc.md')")
-    (h.feat / "requirements.md").write_text((h.feat / "requirements.md").read_text() + "\n## Knowledge References\n- Tags: calc, math\n")
+    shutil.copy(KB_PY, h.repo / "scripts/kb/kb.py")
+    (h.feat / "requirements.md").write_text((h.feat / "requirements.md").read_text() + f"\n## Knowledge References\n- Tags: {tags}\n")
     h.git("add", "-A")
     h.git("commit", "-qm", "kl")
 
 
-def test_knowledge_layer_is_validated_and_passed_to_agents(h):
-    install_fake_kl(h)
-    h.cfg["knowledge_layer"]["validate_cmd"] = "node scripts/kb/kb-validate.mjs"
+def test_knowledge_layer_is_validated_and_resolved_for_every_agent(h):
+    install_kl(h)
     h.scenario(planner=[step(stdout=json.dumps({**PLAN, "knowledge_updates": ["docs/cards/calc.md: add mul to public_contracts"]}))])
     o, reason = h.run()
     assert reason == "completed"
     assert o.kl and o.tags() == ["calc", "math"]
+    assert "scripts/kb/kb.py validate" in o.kb_validate_cmd
     for c in h.calls():
         if "Reply with exactly" in c["prompt"]:
             continue
-        assert "kb-resolve.mjs --tags calc,math" in c["prompt"], c["prompt"][:200]
+        # the orchestrator resolved the tags itself; the agent gets the reading list, not a command to run
+        assert "## Read these cards (L1)" in c["prompt"] and "docs/cards/calc.md" in c["prompt"], c["prompt"][:300]
+        assert "kb.py resolve" not in c["prompt"]
     assert "add mul to public_contracts" in (h.feat / "implementation-plan.md").read_text()
-    assert "@scribe" in h.report()
+    assert "semipilot-scribe" in h.report()
 
 
-def test_unhealthy_knowledge_layer_blocks_preflight(h):
-    install_fake_kl(h, healthy=False)
+def test_unknown_tag_fails_preflight_before_any_agent_call(h):
+    install_kl(h, tags="calc, nosuchtag")
     h.scenario()
     with pytest.raises(orch.PreflightError) as e:
         h.run()
-    assert "knowledge layer unhealthy" in str(e.value)
+    assert "unknown tag" in str(e.value) and "Knowledge References" in str(e.value)
+    assert not h.calls()
+
+
+def test_unhealthy_knowledge_layer_blocks_preflight(h):
+    install_kl(h, healthy=False)
+    h.scenario()
+    with pytest.raises(orch.PreflightError) as e:
+        h.run()
+    assert "knowledge layer unhealthy" in str(e.value) and "prose body is empty" in str(e.value)
     assert not h.calls()
 
 
 def test_knowledge_layer_can_be_switched_off(h):
-    install_fake_kl(h, healthy=False)
+    install_kl(h, healthy=False)
     h.cfg["knowledge_layer"]["mode"] = "off"
     h.scenario()
     o, reason = h.run()
     assert reason == "completed"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_legacy_node_knowledge_layer_still_works(h):
+    """Repositories set up before v0.2 have the Node scripts; they keep working until `semipilot kb init --force`."""
+    (h.repo / "docs/cards").mkdir(parents=True)
+    (h.repo / "docs/cards/_vocabulary.md").write_text("- `calc`\n")
+    (h.repo / "scripts/kb").mkdir(parents=True)
+    (h.repo / "scripts/kb/kb-validate.mjs").write_text("process.exit(0)")
+    (h.repo / "scripts/kb/kb-resolve.mjs").write_text("console.log('## Read these cards (L1)\\ndocs/cards/calc.md')")
+    (h.feat / "requirements.md").write_text((h.feat / "requirements.md").read_text() + "\n## Knowledge References\n- Tags: calc\n")
+    h.git("add", "-A")
+    h.git("commit", "-qm", "kl")
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed" and o.kb_validate_cmd.startswith("node ")
+    impl = [c["prompt"] for c in h.calls() if "Implement **only task" in c["prompt"]]
+    assert impl and all("docs/cards/calc.md" in p for p in impl)
 
 
 # ---------------------------------------------------------------- legacy single-feature layout
@@ -482,3 +530,169 @@ def test_commit_messages_follow_config_and_spec_type(h):
     legacy = json.loads(json.dumps(h.cfg)); del legacy["git"]["commit"]; legacy["git"]["commit_prefix"] = "[bot]"
     assert h.loop(legacy).commit_message("Add function (T1)") == "[bot] add function (T1)"
 
+
+
+# ---------------------------------------------------------------- harness-neutral loop (v0.2)
+def test_role_definitions_are_inlined_not_loaded_as_agents(h):
+    h.scenario()
+    h.run()
+    calls = h.calls()
+    planner = [c for c in calls if "questions-only mode" in task_of(c["prompt"]) or "Output **only** a JSON object matching" in c["prompt"]]
+    assert planner and all("PilotInLoop planner" in c["prompt"] and "\n# Your task\n" in c["prompt"] for c in planner)
+    critics = [c for c in calls if "You are the spec-critic" in c["prompt"] or "You are the plan-critic" in c["prompt"]]
+    assert any("PilotInLoop spec critic" in c["prompt"] for c in critics)
+    assert any("PilotInLoop plan critic" in c["prompt"] for c in critics)
+    for c in calls:
+        assert "--agent" not in c["argv"]
+        assert c["dialect"] == h.harness
+
+
+def test_read_only_roles_never_get_write_tools(h):
+    h.scenario()
+    h.run()
+    write = "--allow-tool=write" if h.harness == "copilot" else "Edit"
+    for c in h.calls():
+        t = task_of(c["prompt"])
+        reading = "questions-only mode" in t or "Output **only** a JSON object" in t or "You are the spec-critic" in t or "You are the plan-critic" in t
+        if reading:
+            assert write not in c["argv"], t[:80]
+        elif "Implement **only task" in t:
+            assert write in c["argv"]
+
+
+def test_claude_prompts_go_through_stdin_and_cost_is_reported(h):
+    h.scenario()
+    h.run()
+    if h.harness == "claude":
+        assert all(c["stdin"] for c in h.calls())
+        assert all("--no-session-persistence" in c["argv"] for c in h.calls())
+        assert h.progress()["budget"]["cost_usd"] > 0
+        assert "Cost reported by the harness" in h.report()
+    else:
+        assert "Cost reported by the harness" not in h.report()
+
+
+def test_agent_switching_branches_halts_the_run(h):
+    h.scenario(implementer_t1=[step(actions=[{"git": ["checkout", "-q", "-b", "sneaky"]}])])
+    o, reason = h.run()
+    assert reason == "guardrail_violation"
+    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/calc"
+    assert "switched the branch to sneaky" in h.report()
+
+
+def test_role_override_from_project_folder(h):
+    roles = h.repo / ".semipilot" / "roles"
+    roles.mkdir(parents=True)
+    (roles / "plan-critic.md").write_text("HOUSE RULES PLAN CRITIC. Instructions: {instructions}\n")
+    h.git("add", "-A")
+    h.git("commit", "-qm", "role override")
+    h.scenario()
+    h.run()
+    crit = [c["prompt"] for c in h.calls() if "You are the plan-critic" in c["prompt"]]
+    assert crit and all(p.startswith("HOUSE RULES PLAN CRITIC") for p in crit)
+
+
+# ---------------------------------------------------------------- review fixes (0.2.0)
+def test_frontmatter_comments_do_not_break_approval_or_branch(h):
+    (h.feat / "requirements.md").write_text(SPEC.replace("status: approved", "type: fix   # conventional type\nstatus: approved   # set by the spec critic"))
+    h.git("commit", "-qam", "commented frontmatter")
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed" and h.progress()["branch"] == "fix/calc"
+
+
+def test_blocked_planner_halts_with_the_question(h):
+    h.scenario(planner=[step(stdout="I read everything.\nBLOCKED: should totals include tax?")])
+    o, reason = h.run()
+    assert reason == "blocked" and "should totals include tax?" in h.report()
+    assert sum(1 for c in h.calls() if "Output **only** a JSON object matching" in c["prompt"]) == 1  # not re-asked
+
+
+def test_blocked_implementer_blocks_the_task_with_its_question(h):
+    h.scenario(implementer_t1=[step(stdout="BLOCKED: which rounding mode?", actions=[write("calc/add.py", ADD_BAD)])])
+    o, reason = h.run()
+    t1 = h.task("T1")
+    assert t1["status"] == "blocked" and t1["blocked_reason"] == "BLOCKED: which rounding mode?" and t1["attempts"] == 1
+    assert not (h.repo / "calc/add.py").exists() and reason == "completed_with_blocked"
+
+
+def test_a_failing_pre_commit_hook_does_not_crash_the_loop(h):
+    hooks = h.git_root / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    (hooks / "pre-commit").write_text("#!/bin/sh\necho hook says no >&2\nexit 1\n")
+    (hooks / "pre-commit").chmod(0o755)
+    h.scenario()
+    o, reason = h.run()
+    assert reason == "completed"
+    o.rollback("T2")  # reverts commit through the hook too
+    assert h.task("T2")["status"] == "pending"
+
+
+def test_transient_error_after_a_branch_switch_never_resets_the_other_branch(h):
+    h.scenario(implementer_t1=[step(exit=1, stderr=h.err["transient"], actions=[{"git": ["checkout", "-q", "main"]}])])
+    o, reason = h.run()
+    assert reason == "guardrail_violation"
+    assert h.git("rev-parse", "main").strip() == h.progress()["base_commit"]  # main was not reset to the run's commits
+    assert h.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/calc"
+
+
+@pytest.mark.parametrize("line,ok", [("- Tags: calc;touch${IFS}pwned", False), ("- **Tags:** calc, math", True)])
+def test_knowledge_tags_are_validated_before_reaching_a_shell(h, line, ok):
+    install_kl(h)
+    text = (h.feat / "requirements.md").read_text().replace("- Tags: calc, math", line)
+    (h.feat / "requirements.md").write_text(text)
+    h.git("commit", "-qam", "tags")
+    h.scenario()
+    if ok:
+        o, reason = h.run()
+        assert reason == "completed" and o.tags() == ["calc", "math"]
+    else:
+        with pytest.raises(orch.PreflightError) as e:
+            h.run()
+        assert "invalid knowledge tag" in str(e.value) and not (h.repo / "pwned").exists()
+
+
+def test_claude_turn_cap_is_a_task_failure_not_an_outage(h):
+    if h.harness != "claude":
+        pytest.skip("structured result subtypes are Claude Code's")
+    capped = step(exit=1, stdout="", claude_json={"subtype": "error_max_turns", "result": ""})
+    h.scenario(implementer_t1=[capped, capped, capped])
+    o, reason = h.run()
+    assert h.progress()["infra"]["transient_failures"] == 0 and h.sleeps == []
+    assert h.task("T1")["status"] == "blocked"
+
+
+def test_claude_api_status_drives_classification(h):
+    if h.harness != "claude":
+        pytest.skip("api_error_status is Claude Code's")
+    h.scenario(implementer_t1=[step(exit=1, stdout="boom", claude_json={"api_error_status": 529}),
+                               step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])])
+    o, reason = h.run()
+    assert reason == "completed" and h.progress()["infra"]["transient_failures"] == 1
+
+
+def test_cost_includes_the_preflight_calls(h):
+    if h.harness != "claude":
+        pytest.skip("cost is reported by Claude Code")
+    h.scenario()
+    h.run()
+    assert round(h.progress()["budget"]["cost_usd"], 2) == round(0.01 * len(h.calls()), 2)
+
+
+def test_resume_after_a_blocked_planner_plans_writes_tests_and_builds(h):
+    h.scenario(planner=[step(stdout="BLOCKED: ints or floats?"), step(stdout=json.dumps(PLAN))])
+    o, reason = h.run()
+    assert reason == "blocked"
+    o, reason = h.resume()  # the human answered in the requirements; the loop picks up at planning
+    assert reason == "completed" and [t["status"] for t in h.progress()["tasks"]] == ["done", "done"]
+    assert "test(calc): acceptance tests (locked)" in h.log()
+
+
+def test_resume_gives_a_blocked_task_fresh_attempts(h):
+    bad = step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_BAD)])
+    good = step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])
+    h.scenario(implementer_t1=[bad, bad, good])
+    o, reason = h.run()
+    assert reason == "completed_with_blocked" and h.task("T1")["status"] == "blocked"
+    o, reason = h.resume()
+    assert reason == "completed" and h.task("T1")["status"] == "done"

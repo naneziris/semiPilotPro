@@ -1,3 +1,3 @@
-"""semipilot — requirements → Gate 1 → PilotInLoop autonomous build on GitHub Copilot CLI."""
+"""semipilot — requirements → Gate 1 → PilotInLoop: an unattended, test-first build loop on GitHub Copilot CLI or Claude Code."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

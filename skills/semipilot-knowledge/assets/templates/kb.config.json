@@ -1,0 +1,5 @@
+{
+  "srcDirs": ["src"],
+  "aliases": { "@/": "src/" },
+  "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".py"]
+}

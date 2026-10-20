@@ -1,0 +1,19 @@
+{
+  "name": "semipilot",
+  "version": "0.2.0",
+  "description": "semiPilot skill pack: refine requirements into tagged acceptance criteria, Gate 1 spec review, operate the unattended PilotInLoop build loop, keep a deterministic knowledge layer (module cards + kb.py) in sync.",
+  "author": {
+    "name": "Nikos Aneziris",
+    "url": "https://github.com/naneziris"
+  },
+  "homepage": "https://github.com/naneziris/semiPilotPro",
+  "repository": "https://github.com/naneziris/semiPilotPro",
+  "keywords": [
+    "requirements",
+    "spec-driven-development",
+    "tdd",
+    "autonomous-loop",
+    "knowledge-layer",
+    "agent-skills"
+  ]
+}

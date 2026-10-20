@@ -5,6 +5,7 @@ Users see only the short repo file; everything else has a sane default here.
 from __future__ import annotations
 
 import copy
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import Optional
@@ -55,6 +56,7 @@ class Layout:
         self.config = self.root / CONFIG_FILE
         self.last_run = self.root / "last-run"
         self.custom_prompts = self.root / "prompts"
+        self.custom_roles = self.root / "roles"
 
     # relative (to the repo) paths are what prompts and git see
     def rel(self, p: Path) -> str:
@@ -107,11 +109,71 @@ class Layout:
         return (self.repo / self.LEGACY_DIR / "requirements.md").exists()
 
 
+KB_PY = "scripts/kb/kb.py"
+KB_NODE_VALIDATE = "scripts/kb/kb-validate.mjs"
+INSTRUCTION_CANDIDATES = ("AGENTS.md", ".github/copilot-instructions.md", "CLAUDE.md")
+
+
+def kb_flavor(repo: Path) -> Optional[str]:
+    """'python' (scripts/kb/kb.py, v0.2+), 'node' (the .mjs scripts of earlier installs) or None."""
+    repo = Path(repo)
+    if (repo / KB_PY).exists():
+        return "python"
+    if (repo / KB_NODE_VALIDATE).exists():
+        return "node"
+    return None
+
+
 def knowledge_layer_present(repo: Path, cfg: dict) -> bool:
     """The knowledge layer (docs/cards + scripts/kb) is used when present, unless the config says otherwise."""
     mode = str((cfg.get("knowledge_layer") or {}).get("mode", "auto")).lower()
     if mode == "off":
         return False
     repo = Path(repo)
-    present = (repo / "docs" / "cards" / "_vocabulary.md").exists() and (repo / "scripts" / "kb" / "kb-validate.mjs").exists()
+    present = (repo / "docs" / "cards" / "_vocabulary.md").exists() and kb_flavor(repo) is not None
     return present or mode == "on"
+
+
+def python_cmd() -> str:
+    """The interpreter running semipilot, quoted for a shell command line."""
+    exe = sys.executable or "python3"
+    return f'"{exe}"' if " " in exe else exe
+
+
+def kb_commands(repo: Path, cfg: dict) -> tuple[str, str]:
+    """(validate command, resolve command with a {tags} placeholder), honouring explicit config values."""
+    kl = cfg.get("knowledge_layer") or {}
+    flavor = kb_flavor(repo)
+    if flavor == "node":
+        auto_v, auto_r = "node scripts/kb/kb-validate.mjs", "node scripts/kb/kb-resolve.mjs --tags {tags}"
+    else:
+        auto_v, auto_r = f"{python_cmd()} {KB_PY} validate", f"{python_cmd()} {KB_PY} resolve --tags {{tags}}"
+    v = kl.get("validate_cmd") or "auto"
+    r = kl.get("resolve_cmd") or "auto"
+    return (auto_v if v == "auto" else v), (auto_r if r == "auto" else r)
+
+
+def instructions_file(repo: Path, cfg: dict) -> str:
+    """The repository's main instructions file (relative path) — `instructions_file` in the config, or the first of
+    AGENTS.md, .github/copilot-instructions.md, CLAUDE.md that exists (AGENTS.md when none does)."""
+    explicit = cfg.get("instructions_file")
+    if explicit and explicit != "auto":
+        return str(explicit)
+    for cand in INSTRUCTION_CANDIDATES:
+        if (Path(repo) / cand).exists():
+            return cand
+    return "AGENTS.md"
+
+
+def legacy_config_notes(cfg: dict) -> list[str]:
+    """Keys from a v0.1 `.semipilot/config.yaml` that no longer do anything, with what replaced them."""
+    user = cfg.get("_user") or {}
+    r = user.get("runner") or {}
+    notes = []
+    if "agents" in r:
+        notes.append("runner.agents is ignored since v0.2: role prompts are inlined into every call (no --agent); "
+                     "override a role with .semipilot/roles/<role>.md")
+    if "allow_tools" in r or "deny_tools" in r:
+        notes.append("runner.allow_tools / runner.deny_tools are ignored since v0.2: use harnesses.<harness>.allow "
+                     "(per permission profile) and harnesses.<harness>.deny")
+    return notes

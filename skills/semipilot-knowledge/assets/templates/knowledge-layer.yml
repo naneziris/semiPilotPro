@@ -1,0 +1,58 @@
+name: Knowledge Layer
+
+# Installed by `semipilot kb init`. Standard-library Python only: no dependency install step.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: {{PROJECT_DIR}}
+
+jobs:
+  # Blocking: cards must parse and resolve, and the committed manifest must be current.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate cards
+        run: python scripts/kb/kb.py validate
+      - name: Manifest up to date
+        run: python scripts/kb/kb.py index --check
+
+  # Warning-only for now (continue-on-error): card edges that no longer match the real import graph
+  # (TypeScript/JavaScript and Python). Remove continue-on-error once it has been quiet for a while.
+  drift:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Drift check (imports vs declared card edges)
+        run: python scripts/kb/kb.py drift
+
+  # Non-blocking nag: the PR touches card-owned code without touching the card (job step summary).
+  guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Staleness nag
+        run: |
+          git diff --name-only --relative "origin/${{ github.base_ref }}...HEAD" \
+            | python scripts/kb/kb.py guard
