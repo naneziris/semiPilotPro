@@ -26,7 +26,7 @@ Then clean up what `doctor` lists as no longer used (it never deletes anything i
 Commit the result. Progress files are unchanged, so a run interrupted on v4 can be resumed with v5.
 
 **Customised the v4 loop agents?** If you edited `.github/agents/pilotinloop-*.agent.md`, those edits no longer take
-effect. Port them to `.semipilot/roles/<planner|spec-critic|plan-critic>.md` (start from `src/semipilot/roles/`).
+effect. Port them to `.semipilot/roles/<planner|plan-fidelity-critic|plan-critic>.md` (start from `src/semipilot/roles/`).
 
 **`runner.command` set in your config?** It overrides the harness's executable. Remove it when you switch harness (or
 use `harnesses.<name>.command`); `init` warns when it does not match.

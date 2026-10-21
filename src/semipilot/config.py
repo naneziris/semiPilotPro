@@ -39,6 +39,10 @@ def load_config(repo: Path, path: Optional[Path] = None) -> dict:
     if user_path.exists():
         user = yaml.safe_load(user_path.read_text(encoding="utf-8")) or {}
     cfg = _deep_merge(cfg, user)
+    for section in ("models", "roles"):  # `spec-critic` was the loop's plan-fidelity critic before 0.2.1
+        old = (user.get(section) or {}) if isinstance(user.get(section), dict) else {}
+        if "spec-critic" in old and "plan-fidelity-critic" not in old:
+            cfg[section]["plan-fidelity-critic"] = old["spec-critic"]
     cfg["_path"] = str(user_path)
     cfg["_user"] = user
     return cfg
@@ -176,4 +180,8 @@ def legacy_config_notes(cfg: dict) -> list[str]:
     if "allow_tools" in r or "deny_tools" in r:
         notes.append("runner.allow_tools / runner.deny_tools are ignored since v0.2: use harnesses.<harness>.allow "
                      "(per permission profile) and harnesses.<harness>.deny")
+    for section in ("models", "roles"):
+        if isinstance(user.get(section), dict) and "spec-critic" in user[section]:
+            notes.append(f"{section}.spec-critic is now {section}.plan-fidelity-critic (the loop's plan-fidelity "
+                         "critic; still honoured under the old name) — rename the key")
     return notes

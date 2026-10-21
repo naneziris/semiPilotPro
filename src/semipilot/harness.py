@@ -1,6 +1,6 @@
 """Harness adapters: the only code that knows which agent CLI runs the loop.
 
-The orchestrator speaks in *roles* (planner, spec-critic, plan-critic, test-writer, test-fixer, implementer,
+The orchestrator speaks in *roles* (planner, plan-fidelity-critic, plan-critic, test-writer, test-fixer, implementer,
 health) and *permission profiles* (`read`, `write`, `none`). An adapter turns one role call into one fresh,
 non-interactive process of its CLI and turns the CLI's output back into the agent's answer:
 
@@ -24,7 +24,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Optional
 
-ROLES = ("planner", "spec-critic", "plan-critic", "test-writer", "test-fixer", "implementer", "health")
+ROLES = ("planner", "plan-fidelity-critic", "plan-critic", "test-writer", "test-fixer", "implementer", "health")
 PROFILES = ("read", "write", "none")
 
 

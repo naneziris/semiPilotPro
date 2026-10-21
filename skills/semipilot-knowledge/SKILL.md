@@ -6,7 +6,7 @@ compatibility: "Needs python3 (3.9+). The included scripts/kb.py uses only the s
 argument-hint: "bootstrap | impact <change> | new-card <module> | sync | catchup | agents-md"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.0"
+  version: "0.2.1"
   suite: semipilot
 ---
 

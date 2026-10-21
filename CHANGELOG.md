@@ -4,6 +4,20 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour, and say how in
 [docs/upgrading.md](docs/upgrading.md)). Branches: `v5` = 0.2.x, `v4` = 0.1.x, `v3` = the manual pipeline.
 
+## [0.2.1] — 2026-10-21
+
+### Changed
+- The loop's `spec-critic` role is now **`plan-fidelity-critic`**. It always reviewed the *plan* against the approved
+  requirements, never the requirements themselves (that is Gate 1, the `semipilot-spec-critic` skill), and the
+  shared name made the two look like one check run twice. Renamed in prompts, logs, the report's cost by role,
+  `models:` and `roles:`. The old config keys and `.semipilot/{roles,prompts}/spec-critic.md` overrides still
+  work; `doctor` asks you to rename them. Gates in the loop are now numbered 2a (fidelity) and 2b (plan).
+- Skills and plugin manifests carry version 0.2.1 (one version for the whole package; skill content unchanged).
+
+### Fixed
+- An acceptance criterion wrapped over several indented lines keeps its `[check: …]` tag (preflight used to read
+  only a criterion's first line and reject it as untagged).
+
 ## [0.2.0] — 2026-10-20
 
 ### Added
@@ -56,8 +70,6 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
 - `resume` continues at the stage that stopped (planning, locked tests or tasks) and gives blocked tasks a fresh set
   of attempts; before, a halt during planning or test-writing could not be resumed and blocked tasks never retried.
 - A run whose tasks end blocked reports `completed_with_blocked` (exit 2) instead of `completed`.
-- An acceptance criterion wrapped over several indented lines keeps its `[check: …]` tag (preflight used to read
-  only a criterion's first line and reject it as untagged).
 - YAML comments in `requirements.md` frontmatter no longer break approval and branch names.
 - The loop's commits and reverts skip git hooks (`--no-verify`), so a project hook cannot crash a run.
 - A tree reset never touches another branch: if an agent switched branches, the loop switches back and halts.

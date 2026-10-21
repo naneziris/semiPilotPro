@@ -33,7 +33,7 @@ Each loop role runs under a **permission profile** (`roles:` in the config). The
 
 | Profile | Roles | Copilot CLI | Claude Code |
 |---|---|---|---|
-| `read` | planner, spec-critic, plan-critic | `read`, `shell(git log/show/diff/status/ls-files)` | `Read`, `Grep`, `Glob`, `Bash(git log/show/diff/ls-files *)`, `Bash(git status)` |
+| `read` | planner, plan-fidelity-critic, plan-critic | `read`, `shell(git log/show/diff/status/ls-files)` | `Read`, `Grep`, `Glob`, `Bash(git log/show/diff/ls-files *)`, `Bash(git status)` |
 | `write` | test-writer, test-fixer, implementer | `read`, `write`, `shell` | `Read`, `Grep`, `Glob`, `Edit`, `Write`, `NotebookEdit`, `TodoWrite`, `Bash` |
 | `none` | `doctor --live` login check | — | — |
 

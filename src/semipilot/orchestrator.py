@@ -38,7 +38,7 @@ from .harness import UnknownHarnessError, get_harness
 from .runner import AGENT_UNAVAILABLE, OK, HaltRun, Runner
 
 LEGACY_AGENT_UNAVAILABLE = "copilot_unavailable"  # stop reason written by v0.1
-ROLE_FOR = {"planner-questions": "planner", "planner-plan": "planner", "spec-critic": "spec-critic",
+ROLE_FOR = {"planner-questions": "planner", "planner-plan": "planner", "plan-fidelity-critic": "plan-fidelity-critic",
             "plan-critic": "plan-critic"}
 TASK_HEADING = "# Your task"
 
@@ -421,15 +421,30 @@ class TestLock:
 
 
 # =============================================================================== prompts
+LEGACY_NAMES = {"plan-fidelity-critic": "spec-critic"}  # loop role/prompt names before 0.2.1
+
+
+def _override(override_dir: Optional[Path], name: str) -> Optional[Path]:
+    """A project override file, under the current name or the name it had before 0.2.1."""
+    if not override_dir:
+        return None
+    for n in (name, LEGACY_NAMES.get(name)):
+        if n and (override_dir / f"{n}.md").exists():
+            return override_dir / f"{n}.md"
+    return None
+
+
 def load_prompt(name: str, override_dir: Optional[Path] = None) -> str:
-    if override_dir and (override_dir / f"{name}.md").exists():
-        return (override_dir / f"{name}.md").read_text(encoding="utf-8")
+    o = _override(override_dir, name)
+    if o:
+        return o.read_text(encoding="utf-8")
     return resources.files("semipilot").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
 
 
 def load_role(name: str, override_dir: Optional[Path] = None) -> str:
-    if override_dir and (override_dir / f"{name}.md").exists():
-        return (override_dir / f"{name}.md").read_text(encoding="utf-8")
+    o = _override(override_dir, name)
+    if o:
+        return o.read_text(encoding="utf-8")
     return resources.files("semipilot").joinpath("roles", f"{name}.md").read_text(encoding="utf-8")
 
 
@@ -1023,7 +1038,7 @@ class Loop:
 
     def call_critics(self, plan: dict, rnd: int) -> list[dict]:
         out = []
-        for critic in ("spec-critic", "plan-critic"):
+        for critic in ("plan-fidelity-critic", "plan-critic"):
             prompt = self.prompt(critic, plan_json=plan, spec_path=self.spec_rel, questions_path=self.questions_rel,
                                  max_files=self.cfg["guardrails"]["max_expected_files_per_task"], **self.kl_context())
             res = self.runner.run(critic, prompt, f"{critic}-round{rnd + 1}")

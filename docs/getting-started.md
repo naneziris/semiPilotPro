@@ -126,7 +126,7 @@ semipilot run export-orders-csv            # macOS, keep it awake: caffeinate -i
 ```
 
 The loop creates `feat/export-orders-csv` from the branch you are on and works unattended for minutes to hours:
-plan → spec critic and plan critic → locked tests → one task at a time → your checks → a commit per task → a final
+plan → plan-fidelity critic and plan critic → locked tests → one task at a time → your checks → a commit per task → a final
 full-suite run → the report. You do not need to watch it. It never pushes.
 
 ### 5. Review

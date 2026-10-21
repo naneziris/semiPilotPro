@@ -5,7 +5,7 @@ license: MIT
 argument-hint: "<the feature idea in plain words>"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.0"
+  version: "0.2.1"
   suite: semipilot
 ---
 

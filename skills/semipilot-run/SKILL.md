@@ -6,7 +6,7 @@ compatibility: "Needs the semipilot CLI (pipx install, or the download with bin/
 argument-hint: "preflight|run|status|review|resume|rollback <feature> [task]"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.0"
+  version: "0.2.1"
   suite: semipilot
 ---
 

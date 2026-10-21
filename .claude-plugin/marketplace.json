@@ -6,7 +6,7 @@
     {
       "name": "semipilot",
       "source": "./",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "description": "Five skills: semipilot-refine, semipilot-spec-critic, semipilot-run, semipilot-scribe, semipilot-knowledge. The unattended loop itself is the semipilot CLI (pipx install git+https://github.com/naneziris/semiPilotPro.git@v5)."
     }
   ]

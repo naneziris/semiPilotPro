@@ -129,7 +129,7 @@ class Harness:
         responses = {
             "questions-only mode": questions or [step(stdout=NO_QUESTIONS)],
             "Output \\*\\*only\\*\\* a JSON object matching": planner or [step(stdout=json.dumps(PLAN))],
-            "You are the spec-critic": critics or [ACCEPT],
+            "You are the plan-fidelity critic": critics or [ACCEPT],
             "You are the plan-critic": critics or [ACCEPT],
             "You are the test-writer": test_writer or [step(actions=[write("tests/test_calc.py", TEST_FILE_GOOD), write("tests/test_mul.py", TEST_FILE_MUL)])],
             "Implement \\*\\*only task T1\\*\\*": implementer_t1 or [step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])],

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "semipilot"
-version = "0.2.0"
+version = "0.2.1"
 description = "Requirements → Gate 1 → PilotInLoop: an unattended, test-first build loop for GitHub Copilot CLI and Claude Code, with humans at the gates, a deterministic knowledge layer, and an Agent Skills pack."
 readme = "README.md"
 requires-python = ">=3.9"

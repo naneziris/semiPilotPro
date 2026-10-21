@@ -18,7 +18,7 @@ runner:
 # model there is the usual first saving; measure with the report's "by role" cost line before and after.
 models:
   planner: null
-  spec-critic: null
+  plan-fidelity-critic: null
   plan-critic: null
   test-writer: null
   test-fixer: null
@@ -28,7 +28,7 @@ models:
 # read-only git. write = can edit files and run commands (tests), minus the harness deny-list. none = no tools.
 roles:
   planner: read
-  spec-critic: read
+  plan-fidelity-critic: read
   plan-critic: read
   test-writer: write
   test-fixer: write

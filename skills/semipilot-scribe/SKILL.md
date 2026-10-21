@@ -6,7 +6,7 @@ compatibility: "Needs python3 for scripts/kb/kb.py (or Node for knowledge layers
 argument-hint: "<feature-slug>"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.0"
+  version: "0.2.1"
   suite: semipilot
 ---
 

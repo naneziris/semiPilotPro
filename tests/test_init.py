@@ -137,11 +137,11 @@ def test_rerun_refreshes_skills_from_another_version_but_never_the_config(tmp_pa
     repo = mkrepo(tmp_path, {"pyproject.toml": ""})
     init(repo, harness="claude")
     skill = repo / ".claude/skills/semipilot-refine/SKILL.md"
-    skill.write_text(skill.read_text().replace('version: "0.2.0"', 'version: "0.1.9"'))
+    skill.write_text(skill.read_text().replace('version: "0.2.1"', 'version: "0.1.9"'))
     (repo / ".semipilot/config.yaml").write_text("harness: claude\nchecks: [{name: t, cmd: x}]\n")
     d, report, info = init(repo, force=True)
     assert ("update", repo / ".claude/skills/semipilot-refine") in report
-    assert 'version: "0.2.0"' in skill.read_text()
+    assert 'version: "0.2.1"' in skill.read_text()
     assert (repo / ".semipilot/config.yaml").read_text() == "harness: claude\nchecks: [{name: t, cmd: x}]\n"
     d, report, info = init(repo)
     assert ("skip", repo / ".claude/skills/semipilot-refine") in report  # current version: kept
@@ -151,6 +151,6 @@ def test_init_never_downgrades_newer_skills(tmp_path):
     repo = mkrepo(tmp_path, {"pyproject.toml": ""})
     init(repo, harness="claude")
     skill = repo / ".claude/skills/semipilot-run/SKILL.md"
-    skill.write_text(skill.read_text().replace('version: "0.2.0"', 'version: "0.3.0"'))
+    skill.write_text(skill.read_text().replace('version: "0.2.1"', 'version: "0.3.0"'))
     d, report, info = init(repo)
     assert ("skip", repo / ".claude/skills/semipilot-run") in report and 'version: "0.3.0"' in skill.read_text()

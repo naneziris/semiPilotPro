@@ -271,7 +271,7 @@ def test_critic_rejection_replans_then_halts(h):
     planner_calls = [c for c in h.calls() if "Output **only** a JSON object matching" in c["prompt"]]
     assert len(planner_calls) == 2
     assert "T1: split it" in (h.feat / "rejection-log.md").read_text()
-    assert "round 1: spec-critic" in h.report()
+    assert "round 1: plan-fidelity-critic" in h.report()
 
 
 def test_critic_rejection_then_accept(h):
@@ -539,8 +539,8 @@ def test_role_definitions_are_inlined_not_loaded_as_agents(h):
     calls = h.calls()
     planner = [c for c in calls if "questions-only mode" in task_of(c["prompt"]) or "Output **only** a JSON object matching" in c["prompt"]]
     assert planner and all("PilotInLoop planner" in c["prompt"] and "\n# Your task\n" in c["prompt"] for c in planner)
-    critics = [c for c in calls if "You are the spec-critic" in c["prompt"] or "You are the plan-critic" in c["prompt"]]
-    assert any("PilotInLoop spec critic" in c["prompt"] for c in critics)
+    critics = [c for c in calls if "You are the plan-fidelity critic" in c["prompt"] or "You are the plan-critic" in c["prompt"]]
+    assert any("PilotInLoop plan-fidelity critic" in c["prompt"] for c in critics)
     assert any("PilotInLoop plan critic" in c["prompt"] for c in critics)
     for c in calls:
         assert "--agent" not in c["argv"]
@@ -553,7 +553,7 @@ def test_read_only_roles_never_get_write_tools(h):
     write = "--allow-tool=write" if h.harness == "copilot" else "Edit"
     for c in h.calls():
         t = task_of(c["prompt"])
-        reading = "questions-only mode" in t or "Output **only** a JSON object" in t or "You are the spec-critic" in t or "You are the plan-critic" in t
+        reading = "questions-only mode" in t or "Output **only** a JSON object" in t or "You are the plan-fidelity critic" in t or "You are the plan-critic" in t
         if reading:
             assert write not in c["argv"], t[:80]
         elif "Implement **only task" in t:
@@ -749,3 +749,18 @@ Not indented, so not part of 5. [check: e]
     assert [c["ref"] for c in crit] == ["a", "b", "c", "d"]
     assert crit[1]["text"] == "A criterion that wraps, onto a second line."
     assert untagged == ["Untagged, and wrapped with no tag at all.", "Untagged."]
+
+
+def test_old_spec_critic_names_still_work(tmp_path):
+    from semipilot.config import legacy_config_notes, load_config
+    (tmp_path / ".semipilot").mkdir()
+    (tmp_path / ".semipilot" / "config.yaml").write_text("models:\n  spec-critic: strong-model\nroles:\n  spec-critic: none\n")
+    cfg = load_config(tmp_path)
+    assert cfg["models"]["plan-fidelity-critic"] == "strong-model"
+    assert cfg["roles"]["plan-fidelity-critic"] == "none"
+    assert any("plan-fidelity-critic" in n for n in legacy_config_notes(cfg))
+    roles = tmp_path / "roles"
+    roles.mkdir()
+    (roles / "spec-critic.md").write_text("custom fidelity role")
+    assert orch.load_role("plan-fidelity-critic", roles) == "custom fidelity role"
+    assert "plan-fidelity critic" in orch.load_role("plan-fidelity-critic", tmp_path / "none")

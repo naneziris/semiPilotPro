@@ -130,6 +130,10 @@ def cmd_doctor(a) -> int:
         harness = None
     for n in legacy_config_notes(cfg):
         info(n)
+    for d in (lay.custom_roles, lay.custom_prompts):
+        if (d / "spec-critic.md").exists():
+            info(f"{lay.rel(d / 'spec-critic.md')} overrides the loop's plan-fidelity critic (still honoured) — "
+                 "rename it to plan-fidelity-critic.md")
     installed = [h for h, d in SKILL_DIRS.items() if all((repo / d / s / "SKILL.md").exists() for s in SKILLS)]
     if harness:
         check(f"skill pack in {SKILL_DIRS[harness.name]}/ (semipilot-refine, -spec-critic, -run, -scribe, -knowledge)",

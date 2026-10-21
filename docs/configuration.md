@@ -48,12 +48,12 @@ task's locked test files plus the files of tasks already done. A `cmd` starting 
 | `extra_flags` | `[]` | appended to every call |
 
 ### `models`
-A model per loop role (`planner`, `spec-critic`, `plan-critic`, `test-writer`, `test-fixer`, `implementer`); `null`
+A model per loop role (`planner`, `plan-fidelity-critic`, `plan-critic`, `test-writer`, `test-fixer`, `implementer`); `null`
 falls back to `runner.model`, and that to the CLI's default. Typical use: keep the strongest model on planner and
 critics, try a cheaper one on the implementer, compare the report's cost by role and its retries before and after.
 
 ### `roles`
-The permission profile for each loop role: `read`, `write` or `none`. Defaults: planner/spec-critic/plan-critic
+The permission profile for each loop role: `read`, `write` or `none`. Defaults: planner/plan-fidelity-critic/plan-critic
 `read`, test-writer/test-fixer/implementer `write`, health (`doctor --live`) `none`.
 
 ### `harnesses.<name>`
@@ -139,9 +139,12 @@ pointed at it. On Claude Code the adapter also denies `Read`/`Edit` on this fold
 
 ## Prompt and role overrides
 
-- `.semipilot/roles/<role>.md` replaces a role definition (`planner`, `spec-critic`, `plan-critic`).
-- `.semipilot/prompts/<name>.md` replaces a task prompt (`planner-questions`, `planner-plan`, `spec-critic`,
-  `plan-critic`, `test-writer`, `implementer`, `test-fixer`).
+- `.semipilot/roles/<role>.md` replaces a role definition (`planner`, `plan-fidelity-critic`, `plan-critic`).
+- `.semipilot/prompts/<name>.md` replaces a task prompt (`planner-questions`, `planner-plan`,
+  `plan-fidelity-critic`, `plan-critic`, `test-writer`, `implementer`, `test-fixer`).
+
+Before 0.2.1 the plan-fidelity critic was called `spec-critic`; config keys and override files under that name
+still work, and `doctor` asks you to rename them.
 
 Start from the packaged files in `src/semipilot/roles/` and `src/semipilot/prompts/`; keep their `{placeholders}`
 and their output formats — the orchestrator parses them. These files are Python format strings: write a literal brace

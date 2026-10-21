@@ -6,7 +6,7 @@ src/semipilot/
   orchestrator.py   the loop: preflight, plan + critique, locked tests, per-task implement/verify, report, rollback
   runner.py         one call = one process: timeout, logging, classification, backoff, circuit breaker
   harness.py        adapters: role + permission profile + prompt → argv/stdin; output → answer + metadata
-  roles/            role definitions inlined before the task prompt (planner, spec-critic, plan-critic)
+  roles/            role definitions inlined before the task prompt (planner, plan-fidelity-critic, plan-critic)
   prompts/          task prompts with {placeholders} (planner-questions, planner-plan, critics, test-writer, …)
   config.py         defaults + project config; layout; knowledge-layer and instructions-file detection
   defaults.yaml     every default, including each harness's allow/deny rules and failure patterns

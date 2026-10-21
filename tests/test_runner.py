@@ -94,9 +94,9 @@ def test_role_profiles_come_from_config(h, tmp_path):
     r = mk_runner(h, tmp_path)
     write_flag = "--allow-tool=write" if h.harness == "copilot" else "Edit"
     assert write_flag in r.build_command("implementer", "x")
-    assert write_flag not in r.build_command("spec-critic", "x")
-    h.cfg["roles"]["spec-critic"] = "write"
-    assert write_flag in mk_runner(h, tmp_path).build_command("spec-critic", "x")
+    assert write_flag not in r.build_command("plan-fidelity-critic", "x")
+    h.cfg["roles"]["plan-fidelity-critic"] = "write"
+    assert write_flag in mk_runner(h, tmp_path).build_command("plan-fidelity-critic", "x")
 
 
 def test_unknown_harness_is_a_clear_error(tmp_path):

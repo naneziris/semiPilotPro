@@ -16,7 +16,7 @@ how we will know it works) and to review; machines do the middle under rules the
 | 2. Gate 1 | `semipilot-spec-critic`, then **you** | agent chat | `status: approved` — the one approval |
 | 3. Questions | planner (questions-only), then **you** | terminal + editor | `open-questions.md`, answered |
 | 4. Plan | planner | loop | `plan.json` → `implementation-plan.md` |
-| 5. Gates 2a/2b | spec critic, plan critic | loop | accept, or reject with fixes (2 rounds max) |
+| 5. Gates 2a/2b | plan-fidelity critic, plan critic | loop | accept, or reject with fixes (2 rounds max) |
 | 6. Tests first | test-writer | loop | one locked test file per task, committed |
 | 7. Implement | implementer, one fresh process per task | loop | one commit per task, or a blocked task |
 | 8. Verify | the orchestrator | loop | your checks after every attempt; full suite at the end |
@@ -40,7 +40,7 @@ This is the contract that lets the middle run unattended:
 | Role | Permission profile | Sees | Produces |
 |---|---|---|---|
 | planner | read | requirements, answers, instructions, resolved knowledge, the code | questions, or the plan JSON |
-| spec critic | read | the plan, requirements, answers, knowledge | `{"verdict", "issues"}` — fidelity to the spec |
+| plan-fidelity critic | read | the plan, requirements, answers, knowledge | `{"verdict", "issues"}` — does the plan deliver the approved spec (it does not review the spec again; Gate 1 did) |
 | plan critic | read | the plan, instructions, area rules, cards, dependency policy | `{"verdict", "issues"}` — conventions, sizing, contracts |
 | test-writer | write | criteria, task interfaces, test conventions | locked tests, one file per task |
 | implementer | write | **one task only**, requirements, answers, decisions, the locked tests' names | code for that task |
