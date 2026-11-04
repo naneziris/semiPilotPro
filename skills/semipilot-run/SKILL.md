@@ -6,7 +6,7 @@ compatibility: "Needs the semipilot CLI (pipx install, or the download with bin/
 argument-hint: "preflight|run|status|review|resume|rollback <feature> [task]"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.1"
+  version: "0.2.2"
   suite: semipilot
 ---
 
@@ -33,26 +33,42 @@ Check the CLI first: `semipilot --version`. Missing → tell the user how to ins
 ## Commands you hand to the user instead of running
 
 `semipilot run <feature>` and `semipilot resume <feature>` take minutes to hours and start their own agent
-processes. Do not run them inside this chat session (they would outlive it or block it). Give the user the exact
-command for a separate terminal, on the base branch, on a machine that stays awake:
+processes. **Never run them yourself** — not here, not detached, not in a new or "separate" terminal you open: your
+shell tool times out long commands, a detached process dies with this session, and a run started by an agent is
+retried and diagnosed by that agent at the user's expense. The user runs them in a terminal tab **they** open, in the
+project folder. Give them exactly this, filled in, and stop:
 
 ```bash
 git checkout main            # the run branches off the branch you are on
 semipilot run <feature>      # macOS: caffeinate -i semipilot run <feature>
 ```
 
-If the user explicitly asks you to start it from here, start it detached with its output in a log file
-(`nohup semipilot run <feature> > .semipilot/runs/<feature>.out 2>&1 &`) and tell them where the log is.
+If the user insists on starting it from this chat, run it in the foreground in the current shell with the longest
+timeout your tool allows, and say once that a plain terminal tab is more reliable. Never `nohup` or background it.
+
+**After any interruption the command is `semipilot resume <feature>`, never `run` again** — the run branch and its
+checkpoint already exist, and `resume` switches to the branch itself. `run` says so too if it is used by mistake.
+
+## Where each step happens
+
+| Step | Where | Who |
+|---|---|---|
+| `/semipilot-refine`, `/semipilot-spec-critic` → `approve` | agent chat | user + you |
+| `semipilot preflight <feature>`, answering `open-questions.md` | chat or terminal | you may run it; the user answers |
+| `semipilot run` / `semipilot resume` | **the user's own terminal tab** | user |
+| `semipilot status` / `review` / `rollback` | chat or terminal | you may run them |
+| `/semipilot-scribe <feature>` | agent chat, after the user reviewed the diff | user + you |
 
 ## Flow
 
 1. **Preflight.** Run `semipilot preflight <feature>`. It refuses with a clear reason when something is wrong
-   (unapproved spec, untagged criteria, dirty tree, branch exists, knowledge layer unhealthy, agent CLI not
-   installed or not logged in) — relay the reason and the fix.
+   (unapproved spec, untagged criteria, dirty tree, an earlier run of the feature, knowledge layer unhealthy, agent
+   CLI not installed) — relay the reason and the fix it prints; do not improvise another one.
 2. **Questions.** When it writes `.semipilot/features/<feature>/open-questions.md`, help the user answer each
    `Answer:` line. Never answer for them; you may explain each question and its recommended default. Re-run
    preflight until it prints *Ready*.
-3. **Run.** Hand over the run command (above).
+3. **Run.** Hand over the run command (above) and stop. The user comes back when it has stopped; every stop prints
+   `Stopped: <what happened>` and `Next: <command>`.
 4. **Review.** After the run: `semipilot review <feature>`, then walk the user through the report in the order of
    [references/reading-the-report.md](references/reading-the-report.md): assumptions first, then blocked tasks,
    then completed tasks and checks, then warnings.
@@ -62,6 +78,10 @@ If the user explicitly asks you to start it from here, start it detached with it
    knowledge layer, and open the PR themselves.
 
 ## Hard constraints
+
+- Do not check connectivity, logins or GitHub yourself (no `curl`, `ping`, `gh auth`, `copilot` test calls). The CLI
+  reports login, quota and outage problems itself, with the fix — relay its message. `semipilot doctor --live` is the
+  only check, and only when the user asks for it (it costs one model call).
 
 - Never push, merge, open a PR, or delete a branch. The loop never does; neither do you.
 - Never edit locked tests, `requirements.md` (except when the user asks you to fix it after a rollback), cards or

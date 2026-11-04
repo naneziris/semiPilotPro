@@ -18,7 +18,7 @@ semipilot init --harness copilot     # or claude — writes `harness:` into .sem
 | | GitHub Copilot CLI | Claude Code |
 |---|---|---|
 | Login | `copilot login` (or `COPILOT_GITHUB_TOKEN` / `GH_TOKEN`) | `claude`, then `/login` (subscription) or `ANTHROPIC_API_KEY` |
-| Headless call | `copilot -p <prompt> -s --no-ask-user` | `claude -p --output-format json --no-session-persistence --permission-mode dontAsk` (prompt on stdin) |
+| Headless call | `copilot -p <prompt> -s --no-ask-user` (prompts over 96 KiB: written to a file the agent reads) | `claude -p --output-format json --no-session-persistence --permission-mode dontAsk` (prompt on stdin) |
 | Permission rules | `--allow-tool=…` / `--deny-tool=…` (deny wins) | `--allowedTools …` / `--disallowedTools …` (deny is evaluated first) |
 | Unapproved tool | only allowed tools run; `--no-ask-user` means it never waits for a person | denied, never prompted (`dontAsk`) |
 | Answer | stdout | `result` in the JSON object |

@@ -190,6 +190,10 @@ class Runner:
             err = (e.stderr or b"").decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
         except FileNotFoundError:
             code, out, err = 127, "", f"{inv.argv[0]}: command not found — {self.harness.install_hint}"
+        except OSError as e:  # e.g. E2BIG "Argument list too long": the CLI never started, retrying cannot help
+            raise HaltRun("agent_start_failed", f"could not start {inv.argv[0]} for the {role} call: {e.strerror or e}"
+                                                f" (prompt {len(prompt.encode('utf-8'))} bytes, "
+                                                f"{len(' '.join(inv.argv).encode('utf-8'))} bytes of arguments)") from e
         dur = time.monotonic() - t0
         text, meta = self.harness.response(out)
         res = CallResult(exit_code=code, stdout=out, stderr=err, duration_s=dur, timed_out=timed_out,

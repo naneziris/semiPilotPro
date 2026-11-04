@@ -14,6 +14,7 @@ tasks a fresh set of attempts and continues at whatever stage stopped — planni
 | `auth_failure` | The agent CLI is not logged in / token expired. Nothing was blamed on a task. | `copilot login` or `claude` → `/login`, then `resume`. |
 | `quota_exhausted` | Premium requests / usage limit / credit balance ran out. Halts immediately, no backoff. | Wait for the reset or raise the limit, then `resume`. |
 | `agent_unavailable` | Sustained outage of the agent service tripped the circuit breaker (shown as `copilot_unavailable` by v0.1). | `resume` later. |
+| `agent_start_failed` | The agent CLI could not be started at all (e.g. the OS refused its command line). No task was blamed; the checkpoint is saved. | Fix the cause in the detail, then `resume`. |
 | `guardrail_violation` | An agent switched branches. The loop switched back (without resetting anything on the other branch) and stopped. | Check the log of that call; `resume`. |
 | `rolled_back` | You ran `rollback`; the tasks are pending again. | Fix the spec or decisions, then `resume`. |
 

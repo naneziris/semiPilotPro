@@ -30,7 +30,7 @@ tests:
 The definition of done: a list of `{name, cmd}` run in order after every implementer attempt, stopping at the first
 failure, and once more (without `{task_tests}`) as the final full suite. `{task_tests}` expands to the current
 task's locked test files plus the files of tasks already done. A `cmd` starting with `#` is a TODO and blocks the run.
-`check_output_tail_lines` (200) is how much failing output goes back to the agent.
+`check_output_tail_lines` (200) and `check_output_max_bytes` (16000) cap how much failing output goes back to the agent (the end is kept, colour codes are stripped, very long lines are cut). Quiet reporters (no colour, no coverage table) make the most of it.
 
 ### `tests`
 | Key | Default | |
@@ -66,6 +66,7 @@ Everything harness-specific. `semipilot config` shows the full defaults.
 | `deny` | both | rules denied on every call (they win over allow) |
 | `failure_patterns.fatal` / `.quota_exhausted` / `.transient` | both | regexes classifying a failed call |
 | `extra_flags` | both | appended to every call for this harness |
+| `prompt_file_threshold` | copilot | default 98304 bytes; a longer prompt is written to a file the agent reads instead of going onto the command line (OS argument limits) |
 | `permission_mode.<profile>` | claude | default `dontAsk`; `bypassPermissions` is refused |
 | `max_turns.<profile>` | claude | `--max-turns` per profile (empty = CLI default) |
 | `max_budget_usd_per_call` | claude | `--max-budget-usd` on every call |

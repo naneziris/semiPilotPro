@@ -4,6 +4,36 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour, and say how in
 [docs/upgrading.md](docs/upgrading.md)). Branches: `v5` = 0.2.x, `v4` = 0.1.x, `v3` = the manual pipeline.
 
+## [0.2.2] — 2026-11-04
+
+Fixes from the first real runs with the Copilot harness, and less guessing about what to run where.
+
+### Fixed
+- **"argument list too long" with the Copilot harness.** The prompt went onto the command line (`copilot -p
+  <prompt>`); large prompts exceeded the OS limit and the CLI never started. Prompts above
+  `harnesses.copilot.prompt_file_threshold` (96 KiB) now go to a file in the run folder that the agent is told to
+  read (it is given the `read` tool for that). A CLI that cannot be started at all now stops the run cleanly with
+  `agent_start_failed` and a saved checkpoint, instead of a traceback.
+- **Failing check output is capped by size**, not only by lines: `check_output_max_bytes` (16 000), colour codes
+  stripped, lines over 2 000 characters cut, the end kept.
+- **`resume` said "nothing to resume" from the base branch.** The checkpoint is committed on the run branch;
+  `resume` now finds it on any local branch and switches there itself.
+- **`run` after an interruption said "branch already exists".** It now recognises an earlier run of the feature
+  and says `semipilot resume <feature>` (or how to start over), before any other check — and no longer
+  auto-commits that run's state onto the base branch.
+- **"not approved"** now names the branch it checked and, when the spec is approved on another local branch, says
+  which one.
+
+### Changed
+- Every stop prints `Stopped: <what happened>  [reason]`, the last line of the detail, the report path, and
+  `Next: <command>`.
+- `run` / `resume` print a note when they look started from inside an agent session (no TTY, or Claude Code's
+  `CLAUDECODE`): run them in a plain terminal tab.
+- `semipilot-run` skill: the agent never starts `run`/`resume` (no detached or "separate" terminals; foreground only
+  when the user insists), always says `resume` after an interruption, and never checks connectivity or logins
+  itself. README and getting-started gain a "where each step happens" table; troubleshooting covers the new
+  messages.
+
 ## [0.2.1] — 2026-10-21
 
 ### Changed

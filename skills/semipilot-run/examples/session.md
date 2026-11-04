@@ -26,7 +26,7 @@ Fill in each `Answer:` line (copy the recommendation if it is right) and I'll re
 
 **Agent** (after the user filled in the answers) runs preflight again → `Ready.` and replies:
 
-> Ready. In a separate terminal on `main`, on a machine that stays awake:
+> Ready. Open a terminal tab of your own (not this chat), on `main`, on a machine that stays awake:
 > `caffeinate -i semipilot run export-orders-csv`. It creates `feat/export-orders-csv`, never pushes, and
 > leaves a report. Tell me when it finishes and I'll walk you through it.
 

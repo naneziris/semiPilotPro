@@ -38,6 +38,8 @@ roles:
 harnesses:
   copilot:
     command: copilot
+    # prompts longer than this (bytes) go to a file the agent reads, not onto the command line (OS argument limits)
+    prompt_file_threshold: 98304
     allow:
       read: ["read", "shell(git log)", "shell(git show)", "shell(git diff)", "shell(git status)", "shell(git ls-files)"]
       write: ["read", "write", "shell"]
@@ -261,6 +263,7 @@ instructions_file: auto
 # Filled by `semipilot init` from the detected stack; users edit these in .semipilot/config.yaml.
 checks: []
 check_output_tail_lines: 200
+check_output_max_bytes: 16000     # cap on the failing check output pasted into the next prompt (the end is kept)
 
 preflight:
   health_prompt: "Reply with exactly the word OK and nothing else."

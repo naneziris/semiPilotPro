@@ -237,6 +237,46 @@ def resolve_feature(lay: Layout, given: str | None) -> str:
     raise SystemExit("semipilot: which feature? pass its slug (see `semipilot status`)")
 
 
+# One line per stop reason: what happened, in words, and the one thing to do next.
+NEXT_STEP = {
+    "completed": ("finished, every task done", "semipilot review {f}"),
+    "completed_with_blocked": ("finished, some tasks blocked", "semipilot review {f}   (answer the blocked tasks in requirements.md, then `semipilot resume {f}`)"),
+    "blocked": ("an agent needs an answer from you", "answer it in requirements.md (see the detail above), then `semipilot resume {f}`"),
+    "plan_rejected": ("the critics rejected every plan", "read rejection-log.md and sharpen requirements.md on your base branch; then delete the run branch and `semipilot run {f}` again"),
+    "auth_failure": ("the agent CLI is not logged in, or lost its login", "log in again (copilot login / claude → /login), then `semipilot resume {f}`"),
+    "quota_exhausted": ("the agent's quota or rate limit is used up", "wait for it to reset (or set another model), then `semipilot resume {f}`"),
+    "agent_unavailable": ("the agent service kept failing", "`semipilot resume {f}` when it is back (nothing is lost)"),
+    "copilot_unavailable": ("the agent service kept failing", "`semipilot resume {f}` when it is back (nothing is lost)"),
+    "agent_start_failed": ("the agent CLI could not be started", "fix the cause in the detail above, then `semipilot resume {f}`"),
+    "budget_exhausted": ("the time or iteration budget ran out", "semipilot review {f}; raise `budget:` in .semipilot/config.yaml to continue, then `semipilot resume {f}`"),
+    "guardrail_violation": ("an agent broke a guardrail and was stopped", "semipilot review {f}, then `semipilot resume {f}`"),
+    "rolled_back": ("tasks were rolled back", "semipilot resume {f}"),
+}
+
+
+def say_stop(reason: str, feature: str, detail: str = "", report: str = "") -> None:
+    what, nxt = NEXT_STEP.get(reason, (reason, "semipilot review {f}"))
+    say(f"Stopped: {what}  [{reason}]")
+    if detail:
+        say(f"  {detail.strip().splitlines()[-1][:300]}")
+    if report:
+        say(f"Report:  {report}")
+    say(f"Next:    {nxt.format(f=feature)}")
+
+
+def warn_if_inside_agent() -> None:
+    """The loop starts its own agent processes and runs for minutes to hours. Started from an agent's shell tool
+    (Copilot CLI, Claude Code, VS Code chat), it gets cut off by that tool's timeouts and the outer agent retries it
+    and spends tokens diagnosing it. Warn; never refuse (CI and scripts are legitimate)."""
+    markers = [v for v in ("CLAUDECODE",) if os.environ.get(v)]  # Claude Code sets it; others: the TTY test
+    if markers or not sys.stdin.isatty():
+        say("Note: this looks like it was started from inside an agent or a non-interactive shell"
+            + (f" ({', '.join(markers)})" if markers else "") + ".")
+        say("      The loop runs for a long time and starts its own agents: run it in a plain terminal tab of your own,")
+        say("      so no agent tool can time it out. Interrupted? Nothing is lost: `semipilot resume <feature>`.")
+        say()
+
+
 def cmd_run(a) -> int:
     repo = find_repo(a.repo)
     cfg = load_config(repo)
@@ -244,6 +284,8 @@ def cmd_run(a) -> int:
         cfg["git"]["branch"] = a.branch
     loop = Loop(repo, cfg, a.feature)
     preflight_only = getattr(a, "preflight_only", False)
+    if not preflight_only:
+        warn_if_inside_agent()
     try:
         reason = loop.run(skip_questions=a.no_questions, preflight_only=preflight_only, stack=getattr(a, "stack", False))
     except NeedsAnswers as q:
@@ -259,15 +301,15 @@ def cmd_run(a) -> int:
         say(f"\nCannot start: {e}", )
         return 1
     except HaltRun as h:  # e.g. auth or quota failure during the planner's questions, before the run starts
-        say(f"\nStopped before the run started: {h.reason} — {h.detail}")
+        say("\nNo run branch was created; fix the cause, then `semipilot run` again.")
+        say_stop(h.reason, a.feature, h.detail)
         return 2
     say()
     if reason == "preflight_ok":
-        say(f"Ready. Start the run when the machine can stay awake:\n  semipilot run {a.feature}")
+        say("Ready. Start the run in a plain terminal tab of your own (not inside an agent chat), with the machine awake:")
+        say(f"  semipilot run {a.feature}" + ("        # macOS: caffeinate -i semipilot run " + a.feature if sys.platform == "darwin" else ""))
         return 0
-    say(f"stop reason: {reason}")
-    say(f"report: {Layout(repo).rel(loop.report_path)}")
-    say(f"next:   semipilot review {a.feature}")
+    say_stop(reason, a.feature, loop.progress.stop_detail if loop.progress else "", Layout(repo).rel(loop.report_path))
     return 0 if reason == "completed" else 2
 
 
@@ -276,12 +318,14 @@ def cmd_resume(a) -> int:
     cfg = load_config(repo)
     slug = resolve_feature(Layout(repo), a.feature)
     loop = Loop(repo, cfg, slug)
+    warn_if_inside_agent()
     try:
         reason = loop.resume()
     except PreflightError as e:
         say(f"\nCannot resume: {e}")
         return 1
-    say(f"\nstop reason: {reason}\nnext: semipilot review {slug}")
+    say()
+    say_stop(reason, slug, loop.progress.stop_detail if loop.progress else "", Layout(repo).rel(loop.report_path))
     return 0 if reason == "completed" else 2
 
 

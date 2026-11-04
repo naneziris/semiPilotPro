@@ -129,6 +129,21 @@ The loop creates `feat/export-orders-csv` from the branch you are on and works u
 plan → plan-fidelity critic and plan critic → locked tests → one task at a time → your checks → a commit per task → a final
 full-suite run → the report. You do not need to watch it. It never pushes.
 
+**Run it in a plain terminal tab you opened yourself** — not from inside Copilot CLI, Claude Code or VS Code chat.
+The loop starts its own agent processes and runs for a long time; an agent's shell tool times it out, moves it to a
+"background terminal" where it stalls, or retries it and spends your tokens diagnosing it. Running it inside an agent
+session also does not show the run's cost: the loop's calls are separate processes. The cost is in the report
+(Claude Code harness) and in your Copilot usage page (Copilot harness).
+
+**If it stops or is interrupted** — closed laptop, killed terminal, outage — nothing is lost. Every stop prints
+`Stopped: <what happened>` and `Next: <the command to run>`. For an interruption that is always:
+
+```bash
+semipilot resume export-orders-csv         # from any branch: it switches to the run branch itself
+```
+
+Do not `run` again: the run branch and its checkpoint already exist, and `run` will tell you to `resume`.
+
 ### 5. Review
 
 ```bash

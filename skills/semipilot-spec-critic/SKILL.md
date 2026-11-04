@@ -5,7 +5,7 @@ license: MIT
 argument-hint: "[feature-slug] | approve"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.1"
+  version: "0.2.2"
   suite: semipilot
 ---
 

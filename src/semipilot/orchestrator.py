@@ -111,6 +111,16 @@ class Git:
     def create_branch(self, name: str) -> None:
         self.run("checkout", "-q", "-b", name)
 
+    def show_file(self, ref: str, path: str) -> Optional[str]:
+        """A project file's content at `ref`, or None when it does not exist there."""
+        r = subprocess.run(["git", "show", f"{ref}:{self.prefix}{path}"], cwd=self.repo, capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else None
+
+    def local_branches(self, limit: int = 100) -> list[str]:
+        """Local branches, most recently committed first."""
+        out = self.run("for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads", check=False)
+        return [b for b in out.splitlines() if b.strip()][:limit]
+
     def checkout(self, name: str) -> None:
         self.run("checkout", "-q", name)
 
@@ -361,10 +371,33 @@ def run_checks(cfg: dict, cwd: Path, only: Optional[list[str]] = None,
         results.append({"name": chk["name"], "passed": passed, "seconds": round(time.monotonic() - t0, 1)})
         if not passed:
             ok = False
-            out = (r.stdout + "\n" + r.stderr).strip().splitlines()
-            errors.append(f"### check `{chk['name']}` failed (`{cmd}`)\n" + "\n".join(out[-tail:]))
+            out = trim_output(r.stdout + "\n" + r.stderr, tail, int(cfg.get("check_output_max_bytes", 16000)))
+            errors.append(f"### check `{chk['name']}` failed (`{cmd}`)\n" + out)
             break
     return ok, "\n\n".join(errors), results
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+MAX_LINE_CHARS = 2000
+
+
+def trim_output(text: str, tail_lines: int, max_bytes: int) -> str:
+    """The end of a check's output, small enough to go into the next prompt: colour codes stripped, very long lines
+    (minified bundles, snapshot diffs) cut, at most `tail_lines` lines and `max_bytes` bytes — the end is kept,
+    because that is where test runners print the failures and the summary."""
+    lines = []
+    for line in _ANSI.sub("", text).strip().splitlines()[-tail_lines:]:
+        if len(line) > MAX_LINE_CHARS:
+            line = line[:MAX_LINE_CHARS] + f" … [{len(line) - MAX_LINE_CHARS} more characters cut]"
+        lines.append(line)
+    out, size = [], 0
+    for line in reversed(lines):
+        size += len(line.encode("utf-8")) + 1
+        if size > max_bytes and out:
+            out.append(f"… [{len(lines) - len(out)} earlier lines cut to keep the prompt small]")
+            break
+        out.append(line)
+    return "\n".join(reversed(out))
 
 
 _NUM = re.compile(r"\b\d+\b")
@@ -657,6 +690,45 @@ class Loop:
                     out[b] = slug
         return out
 
+    def find_checkpoint(self) -> Optional[tuple[str, dict]]:
+        """(branch, progress) of this feature's latest run, wherever its checkpoint is: in the working tree, or
+        committed on the run branch (where `finish` commits it — so it is not visible from the base branch)."""
+        if self.progress_path.exists():
+            try:
+                data = json.loads(self.progress_path.read_text(encoding="utf-8"))
+                if data.get("branch") and not str(data.get("run_id", "")).startswith("preflight-"):
+                    return data["branch"], data
+            except (OSError, ValueError):
+                pass
+        rel = self.lay.rel(self.progress_path)
+        found = []
+        for b in self.git.local_branches():
+            text = self.git.show_file(b, rel)
+            if not text:
+                continue
+            try:
+                data = json.loads(text)
+            except ValueError:
+                continue
+            if data.get("feature") == self.feature and data.get("branch") == b:
+                found.append((data.get("started_at", ""), b, data))
+        if not found:
+            return None
+        _, b, data = max(found, key=lambda x: x[0])
+        return b, data
+
+    def interrupted_run_message(self, branch: str, data: dict) -> str:
+        stopped = data.get("stop_reason") or "interrupted before it could record a stop reason"
+        base = self.git.current_branch()
+        if stopped == "completed":
+            return (f"'{self.feature}' was already built on branch {branch} (completed).\n"
+                    f"  Review it:     semipilot review {self.feature}\n"
+                    f"  Build again:   git branch -D {branch}, then semipilot run {self.feature}")
+        return (f"'{self.feature}' already has a run on branch {branch} (stopped: {stopped}).\n"
+                f"  Continue it:  semipilot resume {self.feature}\n"
+                f"  Start over:   git branch -D {branch}   (from {base if base != branch else 'your base branch'}), "
+                f"then semipilot run {self.feature}")
+
     def ensure_gitignore(self) -> None:
         gi = self.lay.root / ".gitignore"
         self.lay.root.mkdir(parents=True, exist_ok=True)
@@ -672,8 +744,16 @@ class Loop:
         text = self.spec_text()
         fm = parse_frontmatter(text)
         if str(fm.get("status", "")).lower() != "approved":
-            raise PreflightError(f"{self.spec_rel} is not approved. Run `/semipilot-spec-critic` in your agent's chat and "
-                                 "reply `approve` (or set `status: approved` in its frontmatter yourself).")
+            here = self.git.current_branch()
+            elsewhere = [b for b in self.git.local_branches(30) if b != here
+                         and str(parse_frontmatter(self.git.show_file(b, self.spec_rel) or "").get("status", "")).lower() == "approved"]
+            hint = (f" It IS approved on branch {elsewhere[0]}: check out the branch the feature should be built on and "
+                    f"bring the approved {self.spec_rel} there (e.g. `git checkout {elsewhere[0]} -- {self.spec_rel}`)."
+                    if elsewhere else
+                    " Run `/semipilot-spec-critic` in your agent's chat and reply `approve` (or set `status: approved` "
+                    "in its frontmatter yourself).")
+            raise PreflightError(f"{self.spec_rel} is not approved on branch {here} "
+                                 f"(status: {fm.get('status') or 'missing'}).{hint}")
         crit, untagged = parse_acceptance_criteria(text, self.cfg["preflight"]["criterion_tag_regex"])
         if untagged:
             raise PreflightError("acceptance criteria without a machine-checkable [check: ...] tag:\n  - "
@@ -790,6 +870,13 @@ class Loop:
             self.git.run("commit", "-q", "--no-verify", "-m", self.commit_message(what, kind="docs"))
             self.log(f"committed {feat_rel} ({what})")
 
+    def check_no_earlier_run(self) -> None:
+        """A second `run` of a feature whose run branch exists is almost always a retry after an interruption:
+        say `resume`, before any other check can send the user somewhere else."""
+        cp = self.find_checkpoint()
+        if cp and self.git.branch_exists(cp[0]):
+            raise PreflightError(self.interrupted_run_message(*cp))
+
     def check_tree(self, stack: bool = False) -> None:
         self.commit_feature_files("spec and answers")
         if self.git.is_dirty():
@@ -847,6 +934,7 @@ class Loop:
         semipilot branch."""
         self.ensure_gitignore()
         self.check_config()
+        self.check_no_earlier_run()
         crit = self.check_spec()
         self.check_knowledge_layer()
         self.check_tree(stack=stack)
@@ -918,11 +1006,19 @@ class Loop:
         self.log(f"HALT: {h.reason} — {h.detail}")
 
     def resume(self) -> str:
-        if not self.progress_path.exists():
-            raise PreflightError(f"nothing to resume for '{self.feature}' (no progress.json)")
+        cp = self.find_checkpoint()
+        if not cp or not self.git.branch_exists(cp[0]):
+            raise PreflightError(f"nothing to resume for '{self.feature}': no run has started yet (no checkpoint on "
+                                 f"any local branch). Start one with `semipilot run {self.feature}`.")
+        branch = cp[0]
+        if self.git.current_branch() != branch:
+            if self.git.is_dirty():
+                raise PreflightError(f"the run is on branch {branch}, but you are on {self.git.current_branch()} with "
+                                     "uncommitted changes; commit or stash them, then `semipilot resume "
+                                     f"{self.feature}` again (it switches to {branch} itself)")
+            self.git.checkout(branch)
+            self.log(f"switched to the run branch {branch}")
         self.progress = Progress.load(self.progress_path)
-        if self.git.current_branch() != self.progress.branch:
-            self.git.checkout(self.progress.branch)
         self.progress.budget["elapsed_min_before_resume"] = self.progress.budget.get("elapsed_min", 0)
         self.progress.budget["cost_usd_before_resume"] = self.progress.budget.get("cost_usd", 0)
         self.progress.budget["cost_by_role_before_resume"] = dict(self.progress.budget.get("cost_by_role") or {})

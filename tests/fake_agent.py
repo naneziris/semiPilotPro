@@ -44,6 +44,10 @@ def main() -> int:
         prompt = sys.stdin.read()
     else:
         prompt = argv[argv.index("-p") + 1] if "-p" in argv else ""
+        # a long prompt arrives as a pointer to a file (like the real CLI, the agent reads it with its read tool)
+        m = re.match(r"Your full instructions for this task are in the file `([^`]+)`", prompt)
+        if m:
+            prompt = Path(m.group(1)).read_text(encoding="utf-8")
     task = prompt.split(TASK_HEADING, 1)[1] if TASK_HEADING in prompt else prompt
     scenario = json.loads(Path(os.environ["FAKE_AGENT_SCENARIO"]).read_text())
     counter_path = Path(os.environ["FAKE_AGENT_SCENARIO"] + ".counters")

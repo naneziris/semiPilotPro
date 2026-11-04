@@ -18,10 +18,12 @@ Guarantees every adapter keeps (tested):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 ROLES = ("planner", "plan-fidelity-critic", "plan-critic", "test-writer", "test-fixer", "implementer", "health")
@@ -40,6 +42,7 @@ class UnknownHarnessError(ValueError):
 class Invocation:
     argv: list
     stdin: Optional[str] = None
+    prompt_file: Optional[str] = None  # set when the prompt was too long for the command line (see CopilotHarness)
 
 
 class Harness:
@@ -90,8 +93,14 @@ class Harness:
             raise ValueError(f"unknown permission profile {profile!r} for role {role!r}")
         inv = self._command(role, profile, prompt, log_dir)
         inv.argv += list(self.hcfg.get("extra_flags") or []) + list(self.rcfg.get("extra_flags") or []) + list(extra or [])
-        self.guard(inv.argv, prompt)
+        self.guard(inv.argv, self.prompt_arg(inv, prompt))
         return inv
+
+    def prompt_arg(self, inv: Invocation, prompt: str) -> str:
+        """The command-line argument that carries the prompt (exempt from the flag guard)."""
+        if inv.prompt_file:
+            return pointer_prompt(inv.prompt_file)
+        return prompt
 
     def health(self, prompt: str, log_dir: str) -> Invocation:
         return self.command("health", "none", prompt, log_dir)
@@ -120,6 +129,25 @@ class Harness:
         raise NotImplementedError
 
 
+DEFAULT_PROMPT_FILE_THRESHOLD = 96 * 1024
+
+
+def write_prompt_file(prompt: str, role: str, log_dir: str) -> str:
+    """Write a long prompt next to the call logs (`<run>/prompts/`, git-ignored with the run) and return its path."""
+    folder = Path(log_dir).parent / "prompts"
+    folder.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:10]
+    path = folder / f"{role}-{digest}.md"
+    path.write_text(prompt, encoding="utf-8")
+    return str(path.resolve())
+
+
+def pointer_prompt(path: str) -> str:
+    return (f"Your full instructions for this task are in the file `{path}`. Read that whole file first with your "
+            "read tool, then follow it exactly as if it were this message. It is long because it carries the context "
+            "you need; do not skip any part of it.")
+
+
 class CopilotHarness(Harness):
     """GitHub Copilot CLI: `copilot -p <prompt> -s --no-ask-user` with `--allow-tool` / `--deny-tool` rules."""
 
@@ -131,14 +159,28 @@ class CopilotHarness(Harness):
     hard_forbidden = ("--resume", "--continue", "--session-id", "-r", "--allow-all-tools", "--allow-all-paths",
                       "--allow-all", "--yolo")
 
+    # The prompt goes on the command line (`-p <prompt>`). Operating systems cap one argument (Linux: 128 KiB) and
+    # the whole command line plus environment (macOS: ~1 MiB); past that the CLI never starts ("argument list too
+    # long"). A prompt above `prompt_file_threshold` bytes is written to a file in the run folder instead, and the
+    # agent is told to read it — every profile that gets long prompts has the `read` tool.
     def _command(self, role, profile, prompt, log_dir):
-        argv = self.executable + ["-p", prompt, "-s", "--no-ask-user"]
+        threshold = int(self.hcfg.get("prompt_file_threshold") or DEFAULT_PROMPT_FILE_THRESHOLD)
+        prompt_file = None
+        if len(prompt.encode("utf-8")) > threshold:
+            prompt_file = write_prompt_file(prompt, role, log_dir)
+            arg = pointer_prompt(prompt_file)
+        else:
+            arg = prompt
+        argv = self.executable + ["-p", arg, "-s", "--no-ask-user"]
         if self.model_for(role):
             argv += ["--model", self.model_for(role)]
-        argv += [f"--allow-tool={t}" for t in self.allow(profile)]
+        allow = self.allow(profile)
+        if prompt_file and "read" not in allow:
+            allow.append("read")  # it has to read its own instructions
+        argv += [f"--allow-tool={t}" for t in allow]
         argv += [f"--deny-tool={t}" for t in self.deny()]
         argv += ["--log-dir", str(log_dir)]
-        return Invocation(argv)
+        return Invocation(argv, prompt_file=prompt_file)
 
 
 class ClaudeCodeHarness(Harness):

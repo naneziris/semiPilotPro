@@ -23,10 +23,11 @@ VS Code: `chat.useAgentSkills` must be on (default). Restart the chat session af
 | Message | Fix |
 |---|---|
 | `requirements.md not found` | `/semipilot-refine <idea>` in chat |
-| `… is not approved` | `/semipilot-spec-critic`, reply `approve` |
+| `… is not approved on branch X` | `/semipilot-spec-critic`, reply `approve`. If it says *It IS approved on branch Y*, you are on a branch without the approved spec: check out your base branch, or bring the file over as the message shows |
 | `acceptance criteria without a machine-checkable [check: …] tag` | Tag each criterion (the refiner's acceptance-criteria guide) |
 | `working tree is dirty` | Commit or stash. The check is repository-wide on purpose: rollbacks use `git reset --hard` |
-| `branch … already exists` | Delete it, or `--branch other-name` |
+| `'<feature>' already has a run on branch …` | An earlier run was interrupted or stopped: `semipilot resume <feature>`. To start over instead: `git branch -D <branch>`, then `run` |
+| `branch … already exists` | A branch of that name exists that no semipilot run made: delete it, or `--branch other-name` |
 | `you are on <branch>, the branch of an earlier semipilot run` | `git checkout main`, or `--stack` to build on top of it |
 | `knowledge layer unhealthy` | `semipilot kb validate` and fix what it reports |
 | `unknown tag(s)` | Fix `Tags:` under Knowledge References in the requirements |
@@ -34,6 +35,20 @@ VS Code: `chat.useAgentSkills` must be on (default). Restart the chat session af
 | `unknown harness` | `harness: copilot` or `harness: claude` |
 
 ## During or after a run
+
+**"argument list too long" / `agent_start_failed`.** Fixed in 0.2.2: with the Copilot harness, prompts above
+`harnesses.copilot.prompt_file_threshold` (96 KiB) are written to a file in the run folder that the agent reads,
+and failing check output pasted into the next prompt is capped (`check_output_max_bytes`, colour codes stripped,
+long lines cut). If it still happens, your shell environment itself is very large (`env | wc -c`); lower the
+threshold. Then `semipilot resume <feature>`.
+
+**`nothing to resume`.** No run of the feature has started yet (no checkpoint on any local branch) — use `run`.
+Since 0.2.2 `resume` finds the checkpoint on the run branch from whatever branch you are on.
+
+**It ran three times / kept re-running preflight / tried to "ping GitHub".** It was started from inside an agent
+session (Copilot CLI, Claude Code, VS Code chat). That agent's shell tool cuts long commands off, and the agent then
+retries and diagnoses on its own. Run `run` and `resume` in a plain terminal tab; the CLI prints a note when it
+suspects an agent session.
 
 **`plan_rejected`.** Read `rejection-log.md`. Repeated critic rejections usually mean an ambiguous or oversized spec
 — fix it and run again (delete the run branch first). If the plan critic says the instructions are empty, fill them.

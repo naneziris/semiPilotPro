@@ -47,10 +47,17 @@ Then, per feature:
    questions and writes `.semipilot/features/<feature>/requirements.md`, every acceptance criterion tagged with the
    check that proves it.
 2. **Gate 1** — `/semipilot-spec-critic`, then reply `approve`.
-3. **Run** — in a terminal on your base branch: `semipilot run <feature>`. It asks the planner's questions first
-   (answer them inline, run again), then builds on `feat/<feature>`.
+3. **Run** — in a terminal tab of your own (not inside an agent chat), on your base branch: `semipilot run <feature>`.
+   It asks the planner's questions first (answer them inline, run again), then builds on `feat/<feature>`.
+   Interrupted? `semipilot resume <feature>` — never `run` again.
 4. **Review** — `semipilot review <feature>`: assumptions first, then blocked tasks, checks, warnings, a PR draft.
    Wrong assumption → `semipilot rollback <feature> T3`, fix the spec, `semipilot resume <feature>`.
+
+| Step | Where |
+|---|---|
+| refine, spec critic, scribe | your agent's chat (`/semipilot-…`) |
+| `preflight`, `status`, `review`, `rollback` | chat or terminal |
+| `run`, `resume` | **a plain terminal tab** — they run for hours and start their own agents |
 
 Full walkthrough: **[docs/getting-started.md](docs/getting-started.md)**.
 

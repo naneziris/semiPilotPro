@@ -2,7 +2,7 @@
 
 Drive semiPilot's unattended build loop (PilotInLoop) from your agent's chat: preflight and the planner's
 questions, the run command, status, the report walk-through, rollback and resume — with the rules that keep it
-safe (the long run goes to a separate terminal; rollback is confirmed first; nothing is ever pushed).
+safe (the long run is handed to you for a terminal tab of your own — the agent never starts it; rollback is confirmed first; nothing is ever pushed).
 
 ## Use
 
@@ -30,6 +30,6 @@ logged in. This skill is the chat front-end; the CLI does the work.
 ## Safety
 
 Runs only `semipilot status|doctor|preflight|review` on its own; `rollback` only after you confirm; `run`/`resume`
-are handed to you for a separate terminal. Never pushes, merges or opens PRs.
+are handed to you to run in a terminal tab of your own — the agent never starts them. Never pushes, merges or opens PRs.
 
 License: MIT.
