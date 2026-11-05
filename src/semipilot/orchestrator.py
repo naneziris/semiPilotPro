@@ -33,7 +33,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-from .config import INSTRUCTION_CANDIDATES, Layout, instructions_file, kb_commands, knowledge_layer_present
+from .config import (INSTRUCTION_CANDIDATES, Layout, instructions_file, kb_commands, knowledge_layer_present, local_set,
+                     sync_excludes)
 from .harness import UnknownHarnessError, get_harness
 from .runner import AGENT_UNAVAILABLE, OK, HaltRun, Runner
 
@@ -68,9 +69,15 @@ class Git:
     """git, run from the project root. The project may be a subfolder of the repository (monorepo):
     every path in and out of this class is relative to the project, never to the git root."""
 
-    def __init__(self, repo: Path):
+    def __init__(self, repo: Path, local=None):
         self.repo = Path(repo)
         self._prefix: Optional[str] = None
+        # files that stay local (`private`, `git.local_paths`): invisible to the dirty/scope/diff checks, never
+        # committed, kept through resets
+        self.local = local
+
+    def is_local(self, path: str) -> bool:
+        return bool(self.local) and self.local.matches(path)
 
     @property
     def prefix(self) -> str:
@@ -79,8 +86,12 @@ class Git:
             self._prefix = self.run("rev-parse", "--show-prefix").strip()
         return self._prefix
 
-    def status_paths(self) -> list[str]:
-        """Uncommitted paths (whole repository), relative to the project: `../x` for anything outside it."""
+    def status_paths(self, include_local: bool = False) -> list[str]:
+        """Uncommitted paths (whole repository), relative to the project: `../x` for anything outside it.
+        Local files (see `local`) are left out unless asked for."""
+        return [p for p in self._status_paths() if include_local or not self.is_local(p)]
+
+    def _status_paths(self) -> list[str]:
         out = []
         for l in self.run("status", "--porcelain").splitlines():
             if not l.strip():
@@ -102,7 +113,7 @@ class Git:
         return self.run("rev-parse", "HEAD").strip()
 
     def is_dirty(self) -> bool:
-        return bool(self.run("status", "--porcelain").strip())
+        return bool(self.status_paths())
 
     def branch_exists(self, name: str) -> bool:
         return subprocess.run(["git", "rev-parse", "--verify", "--quiet", name], cwd=self.repo,
@@ -124,10 +135,10 @@ class Git:
     def checkout(self, name: str) -> None:
         self.run("checkout", "-q", name)
 
-    def changed_files(self, base: str) -> list[str]:
+    def changed_files(self, base: str, include_local: bool = False) -> list[str]:
         tracked = self.run("diff", "--name-only", "--relative", base).splitlines()
         untracked = self.run("ls-files", "--others", "--exclude-standard").splitlines()
-        return sorted(set(f for f in tracked + untracked if f))
+        return sorted(set(f for f in tracked + untracked if f and (include_local or not self.is_local(f))))
 
     def diff_lines(self, base: str, paths: Optional[list[str]] = None, exclude: Optional[list[str]] = None) -> tuple[int, int]:
         self.run("add", "-N", "--", ".")
@@ -139,6 +150,8 @@ class Git:
         add = rem = 0
         for line in out.splitlines():
             parts = line.split("\t")
+            if len(parts) >= 3 and self.is_local(parts[2]):
+                continue
             if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
                 add += int(parts[0])
                 rem += int(parts[1])
@@ -148,6 +161,9 @@ class Git:
         preserve = preserve or []
         discarded = [f for f in self.changed_files(sha) if not any(f == m or f.startswith(m) for m in preserve)]
         saved: dict[str, bytes] = {}
+        for f in self.changed_files(sha, include_local=True):  # the user's local edits survive every reset
+            if self.is_local(f) and (self.repo / f).is_file():
+                saved[f] = (self.repo / f).read_bytes()
         for m in preserve:
             root = self.repo / m.rstrip("/")
             if root.is_file():
@@ -175,6 +191,10 @@ class Git:
         existing = [e for e in exclude if (self.repo / e.rstrip("/")).exists()]
         if existing:
             self.run("reset", "-q", "--", *[e.rstrip("/") for e in existing])
+        staged_local = [f for f in self.run("diff", "--cached", "--name-only", "--relative").splitlines()
+                        if f and self.is_local(f)]
+        if staged_local:  # local files are never committed
+            self.run("reset", "-q", "--", *staged_local)
         if not self.run("diff", "--cached", "--name-only").strip():
             return self.head()
         self.run("commit", "-q", "--no-verify", "-m", message)
@@ -208,7 +228,7 @@ def load_schema() -> dict:
     return json.loads(resources.files("semipilot").joinpath("plan.schema.json").read_text(encoding="utf-8"))
 
 
-def validate_plan(plan: dict, cfg: dict, criteria: Optional[list[dict]] = None) -> list[str]:
+def validate_plan(plan: dict, cfg: dict, criteria: Optional[list[dict]] = None, local=None) -> list[str]:
     errors: list[str] = []
     try:
         import jsonschema
@@ -231,6 +251,10 @@ def validate_plan(plan: dict, cfg: dict, criteria: Optional[list[dict]] = None) 
         errors.append("duplicate task ids")
     idset = set(ids)
     for t in tasks:
+        own = [f for f in t["expected_files"] if local is not None and local.is_user(f)]
+        if own:
+            errors.append(f"{t['id']}: expected_files include {', '.join(own)}, which the user keeps local "
+                          "(git.local_paths) — plan without changing them, or answer BLOCKED: <which file and why>")
         if len(t["expected_files"]) > g["max_expected_files_per_task"]:
             errors.append(f"{t['id']}: {len(t['expected_files'])} expected_files > max {g['max_expected_files_per_task']}; split it")
         for d in t["depends_on"]:
@@ -539,7 +563,14 @@ class Loop:
         self.cfg = cfg
         self.feature = feature
         self.lay = Layout(self.repo)
+        self.private = bool(cfg.get("private"))
         self.git = Git(self.repo)
+        if self.private or (cfg.get("git") or {}).get("local_paths"):
+            try:
+                sync_excludes(self.repo, cfg)
+            except OSError:
+                pass
+            self.git.local = local_set(self.repo, cfg)
         self.sleep = sleep_fn
         self.now = now_fn or (lambda: dt.datetime.now(dt.timezone.utc))
         self.spec_path = self.lay.requirements(feature)
@@ -563,6 +594,31 @@ class Loop:
     # ------------------------------------------------------------------ helpers
     def log(self, msg: str) -> None:
         print(f"[{self.now().astimezone().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+    # local files (git.local_paths): agents may read them, never change them
+    def local_snapshot(self) -> dict:
+        ls = self.git.local
+        if not ls or not ls.user:
+            return {}
+        return {f: (self.repo / f).read_bytes() for f in ls.user_files()}
+
+    def restore_local(self, snap: dict, who: str) -> list[str]:
+        """Undo whatever an agent did to the user's local files; returns the files it touched."""
+        if not self.git.local or not self.git.local.user:
+            return []
+        now = self.local_snapshot()
+        touched = sorted(f for f in set(snap) | set(now) if snap.get(f) != now.get(f))
+        for f in touched:
+            if f in snap:
+                (self.repo / f).parent.mkdir(parents=True, exist_ok=True)
+                (self.repo / f).write_bytes(snap[f])
+            else:
+                (self.repo / f).unlink(missing_ok=True)
+        if touched:
+            self.log(f"{who} changed local file(s) {', '.join(touched)} — restored")
+            if self.progress:
+                self.progress.warnings.append(f"{who} changed local file(s), restored: {', '.join(touched)}")
+        return touched
 
     def run_dir(self) -> Path:
         return self.lay.runs / self.progress.run_id
@@ -805,6 +861,10 @@ class Loop:
         _, listed = self.instructions()
         protected = (f"Never modify `docs/cards/`, {listed}, `AGENTS.md`, `CLAUDE.md` or `.github/instructions/` — the "
                      "semipilot-scribe skill does that after the human review.")
+        if self.git.local and self.git.local.user:
+            protected += (" These paths are the user's local files and must not be created, changed or deleted: "
+                          + ", ".join(f"`{p}`" for p in self.git.local.user)
+                          + ". If the feature cannot be built without changing one of them, answer `BLOCKED: <which file and why>`.")
         if self.kl:
             tags = self.tags()
             if tags:
@@ -863,6 +923,8 @@ class Loop:
     def commit_feature_files(self, what: str) -> None:
         """If the only uncommitted files are this feature's own Markdown (spec, answers), commit them —
         that is the human's gate work, and asking them to git-add it is a papercut."""
+        if self.private:  # semipilot's files are local: nothing to commit
+            return
         feat_rel = self.lay.rel(self.lay.feature_dir(self.feature)) + "/"
         dirty = self.git.status_paths()
         if dirty and all(f.startswith(feat_rel) or f.startswith(self.lay.rel(self.lay.root) + "/.gitignore") for f in dirty):
@@ -1067,6 +1129,8 @@ class Loop:
         self.maybe_schedule_retry()
 
     def commit_state(self) -> None:
+        if self.private:  # the checkpoint and report stay local files; the run branch holds only the feature's code
+            return
         if self.progress.branch and self.git.branch_exists(self.progress.branch) and self.git.current_branch() != self.progress.branch:
             self.log(f"not committing run state: {self.git.current_branch()} is checked out, not {self.progress.branch}")
             return
@@ -1125,7 +1189,7 @@ class Loop:
             if q:
                 raise HaltRun("blocked", f"the planner needs an answer: {q}")
             plan = Runner.extract_json(res.text)
-            errors = validate_plan(plan, self.cfg, crit) if plan else ["no JSON object found in planner output"]
+            errors = validate_plan(plan, self.cfg, crit, self.git.local) if plan else ["no JSON object found in planner output"]
             if not errors:
                 return plan
             self.log(f"plan attempt {attempt} invalid: {errors}")
@@ -1162,7 +1226,9 @@ class Loop:
                              plan_tasks=[{k: t[k] for k in ("id", "title", "expected_files", "acceptance_checks", "interfaces") if k in t}
                                          for t in self.plan["tasks"]],
                              test_patterns=self.cfg["tests"]["patterns"], **self.kl_context())
+        snap = self.local_snapshot()
         res = self.runner.run("test-writer", prompt, "test-writer")
+        self.restore_local(snap, "the test-writer")
         self.guard_branch("the test-writer")
         q = blocked_question(res.text)
         if q:
@@ -1230,9 +1296,11 @@ class Loop:
                                  spec_path=self.spec_rel, questions_path=self.questions_rel, decisions_path=self.decisions_rel,
                                  locked_tests=sorted(self.lock.checksums), errors=last_errors or "(first attempt — no previous errors)",
                                  **self.kl_context())
+            snap = self.local_snapshot()
             res = self.runner.run("implementer", prompt, label)
             self.save()
             self.guard_branch(f"the implementer ({task['id']})")
+            touched_local = self.restore_local(snap, f"{task['id']}: the implementer")
             q = blocked_question(res.text)
             if q:
                 self.reset_tree(f"{task['id']} blocked by a question")
@@ -1241,6 +1309,16 @@ class Loop:
             if res.timed_out:
                 self.reset_tree(f"{task['id']} call timeout")
                 last_errors = "previous attempt timed out"
+                continue
+            if touched_local:
+                self.reset_tree(f"{task['id']} changed local files")
+                last_errors = (f"You changed {', '.join(touched_local)}, which the user keeps local (git.local_paths); "
+                               "those changes were reverted with your attempt. Build the task without touching them, or "
+                               "answer `BLOCKED: <which file and why>`.")
+                if entry.get("scope_violations", 0) >= 1:
+                    self.mark(entry, "blocked", f"needs local file(s) changed: {', '.join(touched_local)}")
+                    return
+                entry["scope_violations"] = entry.get("scope_violations", 0) + 1
                 continue
             viol = self.lock.violations()
             if viol:
@@ -1298,7 +1376,9 @@ class Loop:
         self.log(f"{task['id']}: contract error in locked tests → test-fixer")
         before = dict(self.lock.checksums)
         prompt = self.prompt("test-fixer", task_json=task, errors=errors, locked_tests=sorted(before), decisions_path=self.decisions_rel)
+        snap = self.local_snapshot()
         self.runner.run("test-fixer", prompt, f"{task['id']}-testfix")
+        self.restore_local(snap, f"{task['id']}: the test-fixer")
         self.guard_branch(f"the test-fixer ({task['id']})")
         impl_files = set(task["expected_files"])
         changed = [f for f in self.git.changed_files(self.last_good_commit()) if not self.is_managed(f)]

@@ -8,6 +8,19 @@ All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachange
 
 Fixes from the first real runs with the Copilot harness, and less guessing about what to run where.
 
+### Added
+- **`private: true`** (`semipilot init --private`) — trial semipilot in a team repository without the team seeing
+  it. semipilot's own files (`.semipilot/`, the skill pack, the knowledge-layer tooling, an untracked `AGENTS.md` /
+  `CLAUDE.md`) are listed in `.git/info/exclude` (git's local-only ignore list) and never committed: no
+  auto-commit of the spec onto the base branch, no run-state commits. A run branch holds only the feature's code
+  commits, so its PR is clean. Checkpoints and reports stay as local files; `resume` uses them.
+- **`git.local_paths`** — your own uncommitted changes that must stay uncommitted (files, folders ending in `/`,
+  globs; `init --private` adds `.github/`). The clean-tree check ignores them, no commit includes them, every reset
+  keeps them, and agents may not change them: a plan whose `expected_files` include one is rejected, an edit to one
+  is reverted and the attempt retried (blocked after a second time), and the prompts list them with "answer
+  `BLOCKED:` if the feature needs one changed".
+- `doctor` shows the local set, the uncommitted local changes, and semipilot files committed before private mode.
+
 ### Fixed
 - **"argument list too long" with the Copilot harness.** The prompt went onto the command line (`copilot -p
   <prompt>`); large prompts exceeded the OS limit and the CLI never started. Prompts above

@@ -25,7 +25,8 @@ VS Code: `chat.useAgentSkills` must be on (default). Restart the chat session af
 | `requirements.md not found` | `/semipilot-refine <idea>` in chat |
 | `… is not approved on branch X` | `/semipilot-spec-critic`, reply `approve`. If it says *It IS approved on branch Y*, you are on a branch without the approved spec: check out your base branch, or bring the file over as the message shows |
 | `acceptance criteria without a machine-checkable [check: …] tag` | Tag each criterion (the refiner's acceptance-criteria guide) |
-| `working tree is dirty` | Commit or stash. The check is repository-wide on purpose: rollbacks use `git reset --hard` |
+| `working tree is dirty` | Commit or stash. The check is repository-wide on purpose: rollbacks use `git reset --hard`. Changes you want to keep uncommitted (agent files, local scripts): list them under `git.local_paths` — they are then ignored, never committed and kept through resets |
+| `expected_files include …, which the user keeps local` / `BLOCKED: needs package.json` | The feature needs a file in `git.local_paths`: commit your local change to it, or take it out of `local_paths`, then `resume` |
 | `'<feature>' already has a run on branch …` | An earlier run was interrupted or stopped: `semipilot resume <feature>`. To start over instead: `git branch -D <branch>`, then `run` |
 | `branch … already exists` | A branch of that name exists that no semipilot run made: delete it, or `--branch other-name` |
 | `you are on <branch>, the branch of an earlier semipilot run` | `git checkout main`, or `--stack` to build on top of it |

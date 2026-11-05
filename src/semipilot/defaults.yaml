@@ -272,7 +272,16 @@ preflight:
   quota_check_cmd: null
   criterion_tag_regex: "\\[check:\\s*(?P<ref>[^\\]]+)\\]"
 
+# Trial semipilot in a team repository without committing it: semipilot's own files (.semipilot/, the skill pack,
+# the knowledge-layer tooling, an AGENTS.md / CLAUDE.md that git does not track) go into .git/info/exclude and are
+# never committed. The run branch then holds only the feature's code commits — a clean PR.
+private: false
+
 git:
+  # Your own uncommitted changes that must stay uncommitted — files, folders ending in /, or globs, relative to the
+  # project (e.g. ".github/", "package.json"). The clean-tree check ignores them, no commit includes them, resets
+  # keep them, and agents may not change them (a plan that needs to is rejected; an edit is reverted).
+  local_paths: []
   # Name of the branch a run creates (from the branch you are on). Placeholders: {type} = the spec's
   # frontmatter `type:` (feat, fix, chore, ...; default feat), {feature} = the feature slug, {date} = YYYYMMDD.
   # Follow your repository's convention here, e.g. "feature/{feature}" or "{type}/{feature}-{date}".

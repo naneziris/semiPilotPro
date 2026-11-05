@@ -185,3 +185,102 @@ def legacy_config_notes(cfg: dict) -> list[str]:
             notes.append(f"{section}.spec-critic is now {section}.plan-fidelity-critic (the loop's plan-fidelity "
                          "critic; still honoured under the old name) — rename the key")
     return notes
+
+
+# =============================================================================== local (never committed) files
+# `private: true` — trial semipilot in a team repository without the team seeing it: semipilot's own files are
+# listed in .git/info/exclude (git's local-only ignore list) and never committed, so a run branch holds only the
+# feature's code. `git.local_paths` — your own uncommitted changes (agent files, instructions, package.json …) that
+# must stay uncommitted: ignored by the clean-tree check, left out of every commit, kept through every reset, and
+# off-limits to the agents.
+PRIVATE_PATHS = [".semipilot/", ".agents/skills/semipilot-*/", ".claude/skills/semipilot-*/", "scripts/kb/",
+                 ".githooks/", "docs/cards/", ".github/workflows/knowledge-layer*.yml"]
+PRIVATE_IF_UNTRACKED = ["AGENTS.md", "CLAUDE.md", "docs/README.md", "docs/decisions.md", "docs/dependencies.md",
+                        "docs/CHANGELOG.md"]
+EXCLUDE_BEGIN = "# >>> semipilot local files (managed by semipilot: `private` / `git.local_paths` in .semipilot/config.yaml)"
+EXCLUDE_END = "# <<< semipilot local files"
+
+
+def _git_out(repo: Path, *args: str) -> Optional[str]:
+    import subprocess
+    r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+class LocalSet:
+    """Project-relative patterns (a file, a folder ending in `/`, or a glob) of files that stay local."""
+
+    def __init__(self, private: list[str], user: list[str], repo: Optional[Path] = None):
+        self.private = [p.strip() for p in private if p and p.strip()]
+        self.user = [p.strip() for p in user if p and p.strip()]
+        self.repo = Path(repo) if repo else None
+
+    @property
+    def patterns(self) -> list[str]:
+        return self.private + self.user
+
+    def __bool__(self) -> bool:
+        return bool(self.patterns)
+
+    @staticmethod
+    def _match(path: str, pattern: str) -> bool:
+        import fnmatch
+        path = path.replace("\\", "/")
+        path = path[2:] if path.startswith("./") else path
+        pat = pattern.replace("\\", "/").rstrip("/")
+        pat = pat[2:] if pat.startswith("./") else pat
+        parts = path.split("/")
+        # the path itself or any folder above it
+        return any(fnmatch.fnmatchcase("/".join(parts[:i]), pat) for i in range(1, len(parts) + 1))
+
+    def matches(self, path: str) -> bool:
+        return any(self._match(path, p) for p in self.patterns)
+
+    def is_user(self, path: str) -> bool:
+        return any(self._match(path, p) for p in self.user)
+
+    def user_files(self) -> list[str]:
+        """Files on disk under the user's local_paths (the ones agents must not change)."""
+        if not self.repo:
+            return []
+        out = set()
+        for pat in self.user:
+            for hit in self.repo.glob(pat.rstrip("/")):
+                files = [hit] if hit.is_file() else [p for p in hit.rglob("*") if p.is_file()] if hit.is_dir() else []
+                for f in files:
+                    rel = f.relative_to(self.repo).as_posix()
+                    if not rel.startswith(".git/"):
+                        out.add(rel)
+        return sorted(out)
+
+
+def local_set(repo: Path, cfg: dict) -> LocalSet:
+    private: list[str] = []
+    if cfg.get("private"):
+        private = list(PRIVATE_PATHS)
+        for f in PRIVATE_IF_UNTRACKED:
+            if (Path(repo) / f).exists() and not (_git_out(repo, "ls-files", "--", f) or "").strip():
+                private.append(f)
+    user = list(((cfg.get("git") or {}).get("local_paths")) or [])
+    return LocalSet(private, user, repo)
+
+
+def sync_excludes(repo: Path, cfg: dict) -> Optional[Path]:
+    """Write (or remove) semipilot's block in .git/info/exclude. Idempotent; returns the exclude file."""
+    repo = Path(repo)
+    rel = _git_out(repo, "rev-parse", "--git-path", "info/exclude")
+    prefix = (_git_out(repo, "rev-parse", "--show-prefix") or "").strip()
+    if rel is None:
+        return None
+    path = (repo / rel.strip()).resolve()
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if EXCLUDE_BEGIN in text and EXCLUDE_END in text:
+        before, rest = text.split(EXCLUDE_BEGIN, 1)
+        text = before.rstrip("\n") + ("\n" if before.strip() else "") + rest.split(EXCLUDE_END, 1)[1].lstrip("\n")
+    ls = local_set(repo, cfg)
+    if ls:
+        lines = ["/" + prefix + p.lstrip("/") for p in ls.patterns]
+        text = (text.rstrip("\n") + "\n" if text.strip() else "") + EXCLUDE_BEGIN + "\n" + "\n".join(lines) + "\n" + EXCLUDE_END + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path

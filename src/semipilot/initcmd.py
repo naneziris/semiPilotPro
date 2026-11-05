@@ -126,8 +126,40 @@ def set_harness_line(cfg_file: Path, harness: str) -> bool:
     return False
 
 
+PRIVATE_BLOCK = """
+# Trial mode: semipilot's own files and `git.local_paths` stay local — listed in .git/info/exclude, never committed;
+# a run branch holds only the feature's code. Set `private: false` (and empty local_paths) when the team adopts it.
+private: true
+"""
+LOCAL_PATHS_DEFAULT = [".github/"]
+
+
+def set_private(cfg_file: Path, local_paths: Optional[list] = None) -> bool:
+    """Turn on `private: true` and add `git.local_paths` in an existing config, editing only those lines.
+    Returns True when the file changed."""
+    text = cfg_file.read_text(encoding="utf-8")
+    new = text
+    if re.search(r"^private:\s*\S+", new, re.MULTILINE):
+        new = re.sub(r"^private:\s*\S+.*$", "private: true", new, count=1, flags=re.MULTILINE)
+    else:
+        new = new.rstrip("\n") + "\n" + PRIVATE_BLOCK
+    paths = LOCAL_PATHS_DEFAULT if local_paths is None else local_paths
+    if paths and not re.search(r"^\s+local_paths:", new, re.MULTILINE):
+        items = "".join(f'    - "{p}"\n' for p in paths)
+        block = ("  # your own uncommitted changes that must stay uncommitted (files, folders ending in /, globs)\n"
+                 f"  local_paths:\n{items}")
+        if re.search(r"^git:\s*$", new, re.MULTILINE):
+            new = re.sub(r"^git:\s*$", "git:\n" + block.rstrip("\n"), new, count=1, flags=re.MULTILINE)
+        else:
+            new = new.rstrip("\n") + "\ngit:\n" + block
+    if new != text:
+        cfg_file.write_text(new, encoding="utf-8")
+        return True
+    return False
+
+
 def init(repo: Path, force: bool = False, harness: Optional[str] = None,
-         skills_for: Optional[list] = None) -> tuple[Detected, list, dict]:
+         skills_for: Optional[list] = None, private: bool = False) -> tuple[Detected, list, dict]:
     """Returns (detected stack, [(action, path)], info) where info has harness, why, skills_for, notes."""
     repo = Path(repo).resolve()
     lay = Layout(repo)
@@ -149,6 +181,8 @@ def init(repo: Path, force: bool = False, harness: Optional[str] = None,
             report[-1] = ("update", lay.config)
     else:
         _write(lay.config, config_template(d, h), report)
+    if private and set_private(lay.config) and report and report[-1] == ("skip", lay.config):
+        report[-1] = ("update", lay.config)
     _write(lay.root / ".gitignore", "runs/\nlast-run\n", report)
     lay.features.mkdir(parents=True, exist_ok=True)
 
@@ -174,6 +208,16 @@ def init(repo: Path, force: bool = False, harness: Optional[str] = None,
     for path, why_legacy in LEGACY_FILES.items():
         if (repo / path).exists():
             notes.append(f"{path} is no longer used ({why_legacy}); delete it when you are ready")
+    cfg_now = yaml.safe_load(lay.config.read_text(encoding="utf-8")) or {} if lay.config.exists() else {}
+    if cfg_now.get("private") or ((cfg_now.get("git") or {}).get("local_paths")):
+        from .config import load_config, local_set, sync_excludes
+        excl = sync_excludes(repo, load_config(repo))
+        ls = local_set(repo, load_config(repo))
+        if cfg_now.get("private"):
+            notes.append("private mode: semipilot's files are listed in "
+                         f"{excl if excl else '.git/info/exclude'} and never committed — `git status` stays clean")
+        if ls.user:
+            notes.append(f"kept local (never committed, agents may not change them): {', '.join(ls.user)}")
     if len(set(chats)) > 1:
         notes.append("skills installed in both .agents/skills and .claude/skills; Copilot CLI reads both folders and "
                      "may list each semipilot skill twice (same content)")

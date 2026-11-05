@@ -59,6 +59,10 @@ project from anywhere inside it; branches and commits still go to the repository
 `.agents/skills/` / `.claude/skills/`: open your chat in that folder (or copy the skills to the repository root's
 skill folder, or to your personal one) so it finds them.
 
+**Trialling it in a team repository first?** `semipilot init --private`: nothing semipilot writes is ever
+committed, and `.github/` (your local agent and instruction changes) stays local too. Add other uncommitted files
+you want to keep, such as your own package.json tweaks, under `git.local_paths`. See [configuration.md](configuration.md#private-and-gitlocal_paths--keep-files-out-of-git).
+
 ### Finish the setup
 
 1. **Confirm the checks** in `.semipilot/config.yaml`. They define "done": a task is accepted only when every check

@@ -80,7 +80,7 @@ def cmd_init(a) -> int:
     if a.skills:
         skills_for = ["copilot", "claude"] if a.skills.strip().lower() in ("both", "all") else \
             [x for x in re.split(r"[,\s]+", a.skills) if x]
-    d, report, info = init(repo, force=a.force, harness=a.harness, skills_for=skills_for)
+    d, report, info = init(repo, force=a.force, harness=a.harness, skills_for=skills_for, private=a.private)
     h = info["harness"]
     say(f"semipilot init → {repo.name} (detected: {d.stack}; loop harness: {h}, {info['why']})")
     for action, path in report:
@@ -94,7 +94,7 @@ def cmd_init(a) -> int:
     say("  1. Open .semipilot/config.yaml and confirm the `checks` commands are right for this project.")
     say(f"  2. Fill in {info['instructions']} (one page: commands, conventions, architecture) — every agent reads it.")
     say(f"  3. In {chat}:  /semipilot-refine <your idea>   then   /semipilot-spec-critic   → reply `approve`")
-    say("  4. In a terminal, on your base branch (usually main):  semipilot run <feature>   — it creates feat/<feature> from there")
+    say("  4. In a plain terminal tab (not an agent chat), on your base branch:  semipilot run <feature>   — it creates feat/<feature> from there")
     say("                               (`semipilot preflight <feature>` first does the checks and the planner's questions only)")
     say("Optional: `semipilot kb init` adds the knowledge layer (module cards + deterministic retrieval).")
     say("Run `semipilot doctor` any time to check the setup.")
@@ -163,6 +163,22 @@ def cmd_doctor(a) -> int:
         check("Claude Code can read AGENTS.md", False, "CLAUDE.md exists, so Claude Code skips AGENTS.md — add a line `@AGENTS.md` to CLAUDE.md")
     checks = cfg.get("checks") or []
     todo = [c for c in checks if str(c.get("cmd", "")).lstrip().startswith("#")]
+    if cfg.get("private") or (cfg.get("git") or {}).get("local_paths"):
+        from .config import local_set, sync_excludes
+        excl = sync_excludes(repo, cfg)
+        ls = local_set(repo, cfg)
+        tracked = Git(repo, ls)
+        committed = [f for f in (subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True).stdout
+                                 .splitlines()) if ls.matches(f) and not ls.is_user(f)]
+        if cfg.get("private"):
+            check(f"private mode: semipilot's files listed in {_rel(excl, repo) if excl else '.git/info/exclude'}, never committed",
+                  not committed, f"already committed before private mode: {', '.join(committed[:5])}"
+                  + (" …" if len(committed) > 5 else "") + " — `git rm --cached -r <path>` to stop tracking them")
+        if ls.user:
+            info(f"kept local (never committed, agents may not change them): {', '.join(ls.user)}")
+            dirty_local = [f for f in tracked.status_paths(include_local=True) if ls.is_user(f)]
+            if dirty_local:
+                info(f"  uncommitted local changes right now: {', '.join(dirty_local[:8])}" + (" …" if len(dirty_local) > 8 else ""))
     check(f"checks configured ({len(checks)})", bool(checks) and not todo, "edit `checks` in .semipilot/config.yaml")
     has_task_tests = any("{task_tests}" in str(c.get("cmd", "")) for c in checks)
     check("test check uses {task_tests}", has_task_tests, "without it every task runs the whole suite (slower, still works)")
@@ -404,6 +420,7 @@ def main(argv=None) -> int:
     p.add_argument("--harness", help="the agent CLI that runs the loop: copilot | claude (default: existing config, else the one on PATH, else copilot)")
     p.add_argument("--skills", help="install the skill pack for these chats: copilot, claude or both (default: the harness)")
     p.add_argument("--force", action="store_true", help="reinstall the semipilot-* skill folders even when they are current (your config and instructions are never overwritten)")
+    p.add_argument("--private", action="store_true", help="trial mode: never commit semipilot's files (listed in .git/info/exclude) and keep .github/ local (git.local_paths)")
     p.add_argument("--here", action="store_true", help="set up the current directory as the project (for a project that lives in a subfolder of a bigger repository); later commands find it from anywhere inside")
     p.set_defaults(fn=cmd_init)
 

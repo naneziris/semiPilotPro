@@ -56,6 +56,39 @@ critics, try a cheaper one on the implementer, compare the report's cost by role
 The permission profile for each loop role: `read`, `write` or `none`. Defaults: planner/plan-fidelity-critic/plan-critic
 `read`, test-writer/test-fixer/implementer `write`, health (`doctor --live`) `none`.
 
+### `private` and `git.local_paths` — keep files out of git
+
+For trialling semipilot in a team repository before proposing it (`semipilot init --private` sets both up):
+
+```yaml
+private: true            # semipilot's own files are never committed
+git:
+  local_paths:           # your uncommitted changes that must stay uncommitted
+    - ".github/"         # a folder (trailing /)
+    - "package.json"     # a file — see the caveat below
+```
+
+| | `private: true` | `git.local_paths` |
+|---|---|---|
+| What | `.semipilot/`, the skill pack, `scripts/kb/`, `.githooks/`, `docs/cards/`, the knowledge-layer workflow, and `AGENTS.md` / `CLAUDE.md` / the `docs/*.md` skeletons when git does not track them | whatever you list: files, folders ending in `/`, globs, relative to the project |
+| Committed | never — listed in `.git/info/exclude`, so `git status` does not show them | never — left out of every commit |
+| Clean-tree check | ignored | ignored (plain `git status` still shows modified tracked files: that is git, not semipilot) |
+| Resets after a failed attempt | kept | kept |
+| Agents | read them as usual | read them; may not create, change or delete them — a plan needing one is rejected, an edit is reverted |
+
+The result: the run branch contains only the feature's code commits, so the PR shows nothing of the workflow.
+Specs, answers, decisions, the report and the checkpoint stay as local files next to it.
+
+**Caveat — local files the feature needs.** A file in `local_paths` cannot be part of the feature. If a feature
+needs it (a new dependency in `package.json`, a CI change under `.github/`), the planner answers `BLOCKED:` and you
+decide: commit your local change first, or take the path out of `local_paths` for that run. So keep workflow-only
+scripts out of `package.json`: the `checks` can call the tools directly (`npx vitest run {task_tests}`,
+`npx tsc --noEmit`).
+
+**Ending the trial.** Set `private: false` and empty `local_paths`; the next command removes semipilot's block from
+`.git/info/exclude`, and you commit what the team adopts. Files committed *before* you turned private mode on stay
+tracked — `doctor` lists them; `git rm --cached -r <path>` stops tracking them.
+
 ### `harnesses.<name>`
 Everything harness-specific. `semipilot config` shows the full defaults.
 
