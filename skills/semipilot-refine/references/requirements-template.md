@@ -4,13 +4,16 @@ Copy this structure exactly. Section names are parsed: the loop reads acceptance
 heading contains "Acceptance", and knowledge tags from the `Tags:` line under *Knowledge References*.
 
 Frontmatter: `type` is the conventional type of the change (`feat` | `fix` | `chore` | `refactor` | `docs`) and names
-the branch; `status` stays `draft` — the spec critic sets `approved` after the human says so. Keep the frontmatter
-free of comments.
+the branch; `risk` is the tier from [risk-tiers.md](risk-tiers.md) (`low` | `medium` | `high`) and decides where the
+run stops for a human; `status` stays `draft` — the spec critic sets `approved` after the human says so. Add
+`issue: <url or #number>` only when the idea came from an issue (`semipilot intake`): the merge request then closes
+it. Keep the frontmatter free of comments.
 
 ```markdown
 ---
 feature: <slug>
 type: feat
+risk: low
 status: draft
 ---
 # Requirement: <short title>
@@ -41,6 +44,9 @@ status: draft
 - <if any>
 
 **Confidence:** <high | medium | low>. If `low`, list the specific unknowns in `Open Questions`.
+
+**Risk tier:** <low | medium | high> — <one sentence: what a green test run would not tell us, and how a mistake
+would be undone>
 
 ## Acceptance Criteria
 1. <observable outcome, "Given … When … Then …" or equivalent> [check: <ref>]

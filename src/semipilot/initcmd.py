@@ -87,6 +87,22 @@ tests:
 # budget:
 #   max_iterations: 30     # implementer calls per run
 #   wall_clock_seconds: 21600
+#   max_cost_usd: null     # stop a run at this spend (Copilot: needs cost.premium_request_usd, or use max_premium_requests)
+
+# How much a feature may do without you is `risk: low | medium | high` in its requirements (docs/autonomy.md).
+# A plan touching one of these paths runs at least at `medium` (it stops once for you to approve the plan).
+# Uncomment to set your own list ([] = none):
+# autonomy:
+#   escalate:
+#     medium: ["**/auth/**", "**/billing/**", "**/payments/**", "**/migrations/**", "**/*.sql"]
+#     high: []
+
+# One small unattended fix per run — `semipilot chore` (docs/chores.md):
+# chores:
+#   items:
+#     - name: lint
+#       find: "<a command printing one finding per line>"
+#       instruction: "Fix this finding in the code; no suppression comments."
 """
 
 

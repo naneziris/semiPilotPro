@@ -22,7 +22,7 @@ semipilot init --harness copilot     # or claude — writes `harness:` into .sem
 | Permission rules | `--allow-tool=…` / `--deny-tool=…` (deny wins) | `--allowedTools …` / `--disallowedTools …` (deny is evaluated first) |
 | Unapproved tool | only allowed tools run; `--no-ask-user` means it never waits for a person | denied, never prompted (`dontAsk`) |
 | Answer | stdout | `result` in the JSON object |
-| Cost visibility | premium requests (not reported per call) | `total_cost_usd` per call — summed in the report |
+| Cost visibility | premium requests and tokens per call, read from the CLI's session files or its stats block (not yet verified live — [configuration](configuration.md#cost)) | dollars and tokens per call, from its JSON result |
 | Skills folder (project) | `.agents/skills/` (also reads `.github/skills/`, `.claude/skills/`) | `.claude/skills/` |
 | Instructions it reads | `AGENTS.md`, `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`, `CLAUDE.md` | `CLAUDE.md`, or `AGENTS.md` when there is no `CLAUDE.md` |
 | Model pin | `models.<role>`, else `runner.model` → `--model` | `models.<role>`, else `runner.model` → `--model` |
@@ -84,7 +84,12 @@ and tool definitions; the lower figure with the prompt cache warm). A typical fe
 1–2 planner calls, 2–4 critic calls, 1 test-writer call and 1–3 implementer calls per task. Preflight and `doctor`
 make no model call of their own (`doctor --live` does, on request).
 
-Measure first: on Claude Code the report shows the run's cost and the cost **by role**. Then, in order of effect:
+A run also makes one reviewer call at the end.
+
+Measure first: the report's *Agent usage* lines show calls and minutes **by role** on both harnesses, plus dollars
+(Claude Code) or premium requests and tokens (Copilot CLI, when its session files are readable; set
+`cost.premium_request_usd` to see dollars). `.semipilot/runs/<run-id>/calls.jsonl` has the same per call. Then, in
+order of effect:
 
 1. **Fewer retries.** Each retry is a whole new session. Tight acceptance criteria, small tasks and a filled-in
    `AGENTS.md` cut more cost than anything below.
@@ -95,11 +100,13 @@ Measure first: on Claude Code the report shows the run's cost and the cost **by 
    the one where a quality drop is caught (more retries or blocked tasks show up in the report).
 4. **Smaller startup context** (Claude Code): `harnesses.claude.bare: true` passes `--bare` (no hooks, plugins, MCP
    servers or memory files at startup). It needs `ANTHROPIC_API_KEY`; bare mode does not use a subscription login.
-5. **Caps for the worst case:** `budget.max_iterations`, `budget.wall_clock_seconds`,
-   `harnesses.claude.max_turns.write`, `harnesses.claude.max_budget_usd_per_call` (`--max-budget-usd`).
+5. **Caps for the worst case:** `budget.max_iterations`, `budget.wall_clock_seconds`, `budget.max_cost_usd`,
+   `budget.max_premium_requests`, `harnesses.claude.max_turns.write`,
+   `harnesses.claude.max_budget_usd_per_call` (`--max-budget-usd`).
 
 Not worth cutting: the questions pass and the two critic gates. They are the cheapest calls and they prevent the most
-expensive failure — a whole branch built on a wrong reading.
+expensive failure — a whole branch built on a wrong reading. The reviewer call (`review.agent`) is one call per run
+and buys back your own time at the review; turn it off only if you do not read its output.
 
 ## Switching harness
 

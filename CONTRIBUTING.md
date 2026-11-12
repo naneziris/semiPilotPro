@@ -6,7 +6,7 @@ Thanks for helping. semiPilot is small on purpose; changes that keep it that way
 
 ```bash
 git clone https://github.com/naneziris/semiPilotPro && cd semiPilotPro
-git checkout v5
+git checkout v6
 pip install -e ".[dev]"
 pytest -q                               # the whole suite, ~3 minutes; no agent CLI or network needed
 ```

@@ -23,6 +23,8 @@ models:
   test-writer: null
   test-fixer: null
   implementer: null
+  reviewer: null                 # reads the whole diff once per run: a strong model pays for itself here
+  chore: null
 
 # Permission profile per loop role. read = can read and search the repository, cannot edit or run anything but
 # read-only git. write = can edit files and run commands (tests), minus the harness deny-list. none = no tools.
@@ -33,6 +35,8 @@ roles:
   test-writer: write
   test-fixer: write
   implementer: write
+  reviewer: read
+  chore: write
   health: none
 
 harnesses:
@@ -40,6 +44,16 @@ harnesses:
     command: copilot
     # prompts longer than this (bytes) go to a file the agent reads, not onto the command line (OS argument limits)
     prompt_file_threshold: 98304
+    # What each call cost. Copilot CLI reports premium requests, tokens per model and API time in two places:
+    #   session — the `session.shutdown` event in the session's events.jsonl under session_state_dir, read after the
+    #             call (nothing about the call changes);
+    #   stats   — the block it prints at exit, which --silent suppresses: set `silent: false` to have it printed;
+    #             semipilot parses it and cuts it from the answer.
+    # source: auto (the stats block when printed, else the session file) | session | stats | off
+    usage:
+      source: auto
+      session_state_dir: "~/.copilot/session-state"
+      silent: true
     allow:
       read: ["read", "shell(git log)", "shell(git show)", "shell(git diff)", "shell(git status)", "shell(git ls-files)"]
       write: ["read", "write", "shell"]
@@ -211,6 +225,45 @@ budget:
   wall_clock_seconds: 21600
   max_critique_rounds: 2
   max_contract_fixes_per_task: 1
+  # Spend caps, checked before every task (null = no cap). They use what the agent CLI reports: dollars on Claude
+  # Code; on Copilot CLI premium requests, and dollars once `cost.premium_request_usd` is set.
+  max_cost_usd: null
+  max_premium_requests: null
+
+# What a Copilot premium request costs you, to show usage as dollars in the report (null = show requests only).
+cost:
+  premium_request_usd: null
+
+# How much of a run a feature may do without a human. The tier is `risk:` in the requirements' frontmatter
+# (semipilot-refine proposes it, Gate 1 checks it), or default_risk when the requirements name none. The plan can
+# only raise it: a plan touching a path under `escalate` gets at least that tier, whatever the requirements say.
+#   low     the checks are the gate; nothing stops the run
+#   medium  + one stop after the critics accept the plan:  semipilot approve <feature>
+#   high    + one stop after every task:                   semipilot resume <feature>  /  semipilot rollback
+autonomy:
+  default_risk: low
+  require_risk: false            # true = preflight refuses requirements without `risk:`
+  tiers:
+    low: {plan_approval: false, task_review: false}
+    medium: {plan_approval: true, task_review: false}
+    high: {plan_approval: true, task_review: true}
+  escalate:                      # globs on the plan's files; `**/x/**` also matches a top-level x/
+    medium:
+      - "**/auth/**"
+      - "**/billing/**"
+      - "**/payments/**"
+      - "**/migrations/**"
+      - "**/*.sql"
+      - ".github/workflows/**"
+      - ".gitlab-ci.yml"
+    high: []
+
+# The review gate. After the last task one read-only `reviewer` call grades the diff against a rubric
+# (override it with .semipilot/roles/reviewer.md) and names what a human should read first. Its verdict opens the
+# report's review packet; it never blocks a run and never edits anything.
+review:
+  agent: true
+  max_findings: 20
 
 guardrails:
   scope_tolerance_extra_files: 2
@@ -245,6 +298,10 @@ tests:
     - "TS2554"
     - "is not a function"
     - "undefined: "
+  # Red before green: right after the tests are locked, each task's tests are run with no implementation yet and
+  # must FAIL. A test that already passes proves nothing about the change. warn (flag it in the report) | halt
+  # (stop the run: tests_not_red) | off. Needs a check whose command uses {task_tests}.
+  red_check: warn
 
 # Knowledge layer (docs/cards + scripts/kb). auto = use it when present.
 # When present: preflight runs validate_cmd; before every loop call the orchestrator runs resolve_cmd with the tags
@@ -290,3 +347,33 @@ git:
   # Placeholders: {type} (feat/fix/... from the spec, or test/docs/chore for the loop's own commits),
   # {feature} = the feature slug as scope, {subject} = what the commit does.
   commit: "{type}({feature}): {subject}"
+
+# Where issues and merge requests live. auto = from the `origin` remote's URL (github.com → gh, gitlab → glab);
+# set it explicitly for a self-hosted GitLab or GitHub Enterprise. Needs that CLI installed and logged in.
+#   semipilot intake <issue>     the issue's text → .semipilot/features/<slug>/issue.md, for /semipilot-refine
+#   semipilot mr <feature>       push the run branch and open a merge / pull request from the report
+forge:
+  provider: auto                 # auto | github | gitlab | none
+  remote: origin
+  base: null                     # the request's target branch; null = the branch the run was started from
+  draft: true
+  open_mr: manual                # manual = only `semipilot mr`; auto = also right after a run that completed
+  commands: {}                   # override a command line: issue_view, mr_create (lists; see docs/configuration.md)
+
+# Chores: one small fix per run, unattended, on its own branch — `semipilot chore [name]`, usually from a scheduler.
+# No planner, no critics: the gate is mechanical. The fix must keep every existing test untouched, stay under the
+# caps below and pass the checks; with a `find` command the finding must also be gone and no new one may appear.
+chores:
+  max_files: 3
+  max_diff_lines: 80
+  max_attempts: 2
+  skip_after_failures: 2         # a finding that failed this often is skipped until `semipilot chore --reset`
+  max_open: 3                    # unmerged chore branches waiting for review; at this many, nothing new is attempted
+  branch: "chore/{chore}-{date}-{id}"
+  open_mr: false                 # true = push the branch and open a request for every successful chore
+  items: []
+  # - name: lint
+  #   find: "npx eslint . --format unix"      # one finding per line; the exit code is ignored
+  #   match: "^[^:]+:\\d+:\\d+:"                # optional: only lines matching this regex are findings
+  #   instruction: "Fix this ESLint finding in the code. No eslint-disable comments."
+  #   checks: [lint, tests]                   # optional: which checks gate it (default: all)

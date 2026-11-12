@@ -1,4 +1,38 @@
-# Upgrading from v4 (semipilot 0.1) to v5 (0.2)
+# Upgrading
+
+## From v5 (semipilot 0.2) to v6 (0.3)
+
+0.3 changes **where the human is**, not how the loop builds. Your config, requirements, plans, cards and skills
+carry over; a run interrupted on 0.2 can be resumed on 0.3.
+
+```bash
+pipx install --force git+https://github.com/naneziris/semiPilotPro.git@v6     # or download the v6 ZIP
+cd your-repo
+semipilot init            # replaces the semipilot-* skill folders with the 0.3 ones; never touches your config
+semipilot doctor          # new lines: risk tiers, forge, Copilot usage source
+```
+
+What behaves differently without you changing anything:
+
+| Change | Effect | To get the 0.2 behaviour |
+|---|---|---|
+| **Paths raise the risk tier.** A plan touching `**/auth/**`, `**/billing/**`, `**/payments/**`, `**/migrations/**`, `**/*.sql`, `.github/workflows/**` or `.gitlab-ci.yml` runs at least at `medium`. | The run stops once with `plan_approval`; `semipilot approve <feature>` continues. | `autonomy: {escalate: {medium: []}}` |
+| **A reviewer call after the last task.** | One more model call per run; the report opens with a review packet (section 0). Sections 1–11 are unchanged. | `review: {agent: false}` (the packet stays, without the reviewer's lines) |
+| **Red check after the tests are locked.** | One scoped test run per task before implementation; a task whose tests already pass gets a warning. | `tests: {red_check: off}` |
+| **Exit code 3** for `plan_approval` and `task_review` (it already meant "questions to answer"). | Scripts that treat every non-zero exit as failure see a 3 where a person is needed. | — |
+| **Copilot usage** is read from `~/.copilot/session-state` after each call. | *Agent usage* lines in the report; nothing about the calls changes. | `harnesses: {copilot: {usage: {source: "off"}}}` |
+
+Requirements written before 0.3 have no `risk:` line; they run at `autonomy.default_risk` (`low`) exactly as
+before. New ones get a tier from `/semipilot-refine`. To require one everywhere: `autonomy: {require_risk: true}`.
+
+New, and off until you use them: `semipilot approve` / `replan` (only for medium/high-risk features),
+`semipilot intake`, `semipilot mr`, `semipilot chore`, `budget.max_cost_usd` / `max_premium_requests`,
+`cost.premium_request_usd`. See [autonomy.md](autonomy.md), [forge.md](forge.md), [chores.md](chores.md).
+
+**Overrode the loop's prompts?** `.semipilot/prompts/` and `.semipilot/roles/` overrides keep working. Two new
+names can be overridden: `reviewer` (role = the rubric, and prompt) and `chore` (prompt).
+
+## From v4 (semipilot 0.1) to v5 (0.2)
 
 0.2 makes semiPilot harness-neutral: the loop runs on GitHub Copilot CLI **or** Claude Code, the interactive steps
 are Agent Skills instead of Copilot prompt files and agents, and the knowledge layer's tooling is one Python file.

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .harness import ForbiddenFlagError, Harness, get_harness, role_profile  # noqa: F401  (re-exported)
+from .usage import Ledger
 
 OK = "ok"
 TASK_FAILURE = "task_failure"
@@ -57,6 +58,7 @@ class CallResult:
     command: list = field(default_factory=list)
     text: str = ""            # the agent's answer (stdout for plain-text CLIs, `result` for JSON ones)
     meta: dict = field(default_factory=dict)
+    usage: dict = field(default_factory=dict)   # what the call cost, as far as the CLI reports it (usage.py)
 
     @property
     def combined(self) -> str:
@@ -161,6 +163,7 @@ class Runner:
         self.calls: list = []
         self.cost_usd: float = 0.0
         self.cost_by_role: dict = {}
+        self.ledger = Ledger()         # calls, seconds and reported usage per role (usage.py)
         self._unknown_seen: set = set()
 
     # ------------------------------------------------------------------ command
@@ -177,6 +180,7 @@ class Runner:
         timeout = float(self.rcfg["call_timeout_seconds"])
         log_path = self.log_dir / f"{attempt_label}.log"
         t0 = time.monotonic()
+        started = time.time()
         timed_out = False
         stdin_kw = {"input": inv.stdin} if inv.stdin is not None else {"stdin": subprocess.DEVNULL}
         try:
@@ -195,7 +199,13 @@ class Runner:
                                                 f" (prompt {len(prompt.encode('utf-8'))} bytes, "
                                                 f"{len(' '.join(inv.argv).encode('utf-8'))} bytes of arguments)") from e
         dur = time.monotonic() - t0
+        raw_out, raw_err = out, err
+        out, err = self.harness.scrub(out, err)  # usage stats are neither the answer nor an error
         text, meta = self.harness.response(out)
+        try:
+            used = self.harness.usage(raw_out, raw_err, meta, started, self.cwd)
+        except Exception:  # noqa: BLE001 — measuring a call must never fail it
+            used = {}
         res = CallResult(exit_code=code, stdout=out, stderr=err, duration_s=dur, timed_out=timed_out,
                          log_path=str(log_path), command=inv.argv, text=text, meta=meta)
         res.kind = classify(res, self.patterns, self.harness)
@@ -203,10 +213,20 @@ class Runner:
         if isinstance(cost, (int, float)):
             self.cost_usd += float(cost)
             self.cost_by_role[role] = self.cost_by_role.get(role, 0.0) + float(cost)
+        self.ledger.add(role, dur, used)
+        res.usage = used
         self._write_log(log_path, role, prompt, res)
-        self.calls.append({"label": attempt_label, "role": role, "kind": res.kind, "exit": code,
-                           "duration_s": round(dur, 1), "timed_out": timed_out,
-                           **({"cost_usd": round(float(cost), 4)} if isinstance(cost, (int, float)) else {})})
+        call = {"label": attempt_label, "role": role, "kind": res.kind, "exit": code,
+                "duration_s": round(dur, 1), "timed_out": timed_out,
+                **({"cost_usd": round(float(cost), 4)} if isinstance(cost, (int, float)) else {}),
+                **({"usage": used} if used else {})}
+        self.calls.append(call)
+        try:  # one line per call, for anyone measuring the loop (untracked, next to the call logs)
+            with open(self.log_dir / "calls.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"at": round(started, 1), "harness": self.harness.name,
+                                    "model": used.get("model") or self.harness.model_for(role) or None, **call}) + "\n")
+        except OSError:
+            pass
         return res
 
     def _write_log(self, path: Path, role: str, prompt: str, res: CallResult) -> None:
@@ -214,7 +234,7 @@ class Runner:
         body = [
             f"# harness: {self.harness.name}", f"# role: {role} ({role_profile(self.cfg, role)})",
             f"# kind: {res.kind}", f"# exit: {res.exit_code}", f"# duration_s: {res.duration_s:.1f}",
-            f"# timed_out: {res.timed_out}", f"# meta: {json.dumps(res.meta)}",
+            f"# timed_out: {res.timed_out}", f"# meta: {json.dumps(res.meta)}", f"# usage: {json.dumps(res.usage)}",
             f"# command: {' '.join(shlex.quote(a) for a in shown)}",
             "", "## PROMPT", prompt, "", "## ANSWER", res.text, "", "## STDOUT", res.stdout, "", "## STDERR", res.stderr,
         ]

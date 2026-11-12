@@ -6,9 +6,14 @@
     semipilot run <feature>        PilotInLoop: run the loop for approved requirements on a new branch made from
                                    the branch you are on (asks its questions first)
     semipilot status               where every feature stands
-    semipilot review [feature]     print the report, assumptions first
-    semipilot resume [feature]     continue an interrupted / blocked run
+    semipilot review [feature]     print the report: the review packet first (--agent runs the reviewer again)
+    semipilot resume [feature]     continue an interrupted / blocked run (after a per-task stop: accept the task)
+    semipilot approve [feature]    approve the plan of a medium/high-risk feature and continue the run
+    semipilot replan <feature> -m "<what to change>"   send the plan back to the planner with your words
     semipilot rollback <feature> <task>   git-revert a task and its dependents, set them to pending
+    semipilot intake <issue>       read a GitHub/GitLab issue into a feature folder, for /semipilot-refine
+    semipilot mr [feature]         push the run branch and open a draft merge / pull request from the report
+    semipilot chore [name]         one small unattended fix on its own branch (for a scheduler)
     semipilot kb init|validate|index|resolve|drift|guard|catchup   the knowledge layer
     semipilot config               print the effective configuration
 """
@@ -28,7 +33,8 @@ from . import __version__
 from .config import (CONFIG_FILE, SEMIPILOT_DIR, Layout, instructions_file, kb_commands, kb_flavor,
                      knowledge_layer_present, legacy_config_notes, load_config)
 from .harness import UnknownHarnessError, get_harness
-from .orchestrator import Git, Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter, parse_questions
+from .orchestrator import (HUMAN_GATES, Git, Loop, NeedsAnswers, PreflightError, Progress, parse_frontmatter,
+                           parse_questions)
 from .runner import HaltRun
 from .skills_pack import SKILL_DIRS, SKILLS
 
@@ -181,7 +187,42 @@ def cmd_doctor(a) -> int:
                 info(f"  uncommitted local changes right now: {', '.join(dirty_local[:8])}" + (" …" if len(dirty_local) > 8 else ""))
     check(f"checks configured ({len(checks)})", bool(checks) and not todo, "edit `checks` in .semipilot/config.yaml")
     has_task_tests = any("{task_tests}" in str(c.get("cmd", "")) for c in checks)
-    check("test check uses {task_tests}", has_task_tests, "without it every task runs the whole suite (slower, still works)")
+    check("test check uses {task_tests}", has_task_tests,
+          "without it every task runs the whole suite (slower, still works) and the red check is skipped")
+    from . import forge, risk as risk_mod
+    try:
+        auto = cfg.get("autonomy") or {}
+        esc = auto.get("escalate") or {}
+        info(f"risk tiers: default {risk_mod.default_risk(cfg)}"
+             + ("; requirements must name one" if auto.get("require_risk") else "")
+             + "; raised by path — " + ("; ".join(f"{t}: {len(esc.get(t) or [])} pattern(s)" for t in ("medium", "high"))))
+    except risk_mod.RiskError as e:
+        check("autonomy.default_risk", False, str(e))
+    prov = forge.provider(cfg, repo)
+    if prov:
+        cli_name = ((cfg.get("forge") or {}).get("commands") or {}).get("mr_create", [forge.CLI[prov]])[0]
+        if shutil.which(cli_name):
+            info(f"forge: {prov} via `{cli_name}` — `semipilot intake <issue>` and `semipilot mr <feature>` are available")
+        else:
+            info(f"forge: {prov}, but `{cli_name}` is not on PATH — {forge.INSTALL[prov]} to use `semipilot intake` / `semipilot mr`")
+    else:
+        info("forge: none detected (no github/gitlab `origin` remote) — set `forge.provider` to use `semipilot intake` / `semipilot mr`")
+    chore_items = [c for c in ((cfg.get("chores") or {}).get("items") or []) if isinstance(c, dict)]
+    if chore_items:
+        info(f"chores: {', '.join(str(c.get('name')) for c in chore_items)} — `semipilot chore --list` shows what each would fix")
+    if harness and harness.name == "copilot":
+        u = (harness.hcfg.get("usage") or {}) if isinstance(harness.hcfg.get("usage"), dict) else {}
+        src = str(u.get("source") or "auto").lower()
+        sdir = Path(os.path.expandvars(os.path.expanduser(str(u.get("session_state_dir") or "~/.copilot/session-state"))))
+        if src == "off":
+            info("Copilot usage: off (the report shows calls and time only)")
+        elif not u.get("silent", True):
+            info("Copilot usage: read from the stats block the CLI prints (usage.silent: false)")
+        elif sdir.is_dir():
+            info(f"Copilot usage: read from session files in {sdir} (premium requests, tokens)")
+        else:
+            info(f"Copilot usage: {sdir} not found — the report will show calls and time only; "
+                 "see docs/configuration.md > Cost")
     if harness:
         exe = harness.executable[0]
         found = shutil.which(exe) is not None
@@ -210,7 +251,24 @@ def feature_state(lay: Layout, slug: str, cfg: dict) -> tuple[str, str]:
     if lay.report(slug).exists() and lay.progress(slug).exists():
         p = Progress.load(lay.progress(slug))
         done = sum(1 for t in p.tasks if t["status"] == "done")
-        return f"ran: {p.stop_reason or 'running'} ({done}/{len(p.tasks)} tasks done)", f"semipilot review {slug}"
+        tier = (p.risk or {}).get("effective")
+        if p.stop_reason == "plan_approval":
+            return (f"waiting for you: approve the plan ({tier} risk)",
+                    f"read {lay.rel(lay.implementation_plan(slug))}, then `semipilot approve {slug}`")
+        if p.stop_reason == "task_review":
+            waiting = next((t["id"] for t in p.tasks if t.get("review") == "pending"), "a task")
+            return (f"waiting for you: review {waiting} ({done}/{len(p.tasks)} tasks done, {tier} risk)",
+                    f"semipilot resume {slug}   (or `semipilot rollback {slug} {waiting}`)")
+        if p.stop_reason == "replan_requested":
+            return "plan sent back with your feedback", f"semipilot resume {slug}"
+        note = ""
+        if p.stop_reason == "completed":
+            verdict = (p.review or {}).get("verdict")
+            note = {"ship": ", reviewer: ship", "ship_with_notes": ", reviewer: ship with notes",
+                    "needs_changes": ", reviewer: needs changes"}.get(verdict, "")
+            if (p.mr or {}).get("url"):
+                return f"ran: completed{note}, request open", p.mr["url"]
+        return f"ran: {p.stop_reason or 'running'} ({done}/{len(p.tasks)} tasks done{note})", f"semipilot review {slug}"
     if lay.open_questions(slug).exists():
         n, ans = parse_questions(lay.open_questions(slug).read_text(encoding="utf-8"))
         if n and ans < n:
@@ -258,7 +316,7 @@ NEXT_STEP = {
     "completed": ("finished, every task done", "semipilot review {f}"),
     "completed_with_blocked": ("finished, some tasks blocked", "semipilot review {f}   (answer the blocked tasks in requirements.md, then `semipilot resume {f}`)"),
     "blocked": ("an agent needs an answer from you", "answer it in requirements.md (see the detail above), then `semipilot resume {f}`"),
-    "plan_rejected": ("the critics rejected every plan", "read rejection-log.md and sharpen requirements.md on your base branch; then delete the run branch and `semipilot run {f}` again"),
+    "plan_rejected": ("the critics rejected every plan", "read rejection-log.md; steer the planner with `semipilot replan {f} -m \"<guidance>\"`, or sharpen requirements.md on your base branch, delete the run branch and `semipilot run {f}` again"),
     "auth_failure": ("the agent CLI is not logged in, or lost its login", "log in again (copilot login / claude → /login), then `semipilot resume {f}`"),
     "quota_exhausted": ("the agent's quota or rate limit is used up", "wait for it to reset (or set another model), then `semipilot resume {f}`"),
     "agent_unavailable": ("the agent service kept failing", "`semipilot resume {f}` when it is back (nothing is lost)"),
@@ -267,13 +325,19 @@ NEXT_STEP = {
     "budget_exhausted": ("the time or iteration budget ran out", "semipilot review {f}; raise `budget:` in .semipilot/config.yaml to continue, then `semipilot resume {f}`"),
     "guardrail_violation": ("an agent broke a guardrail and was stopped", "semipilot review {f}, then `semipilot resume {f}`"),
     "rolled_back": ("tasks were rolled back", "semipilot resume {f}"),
+    "plan_approval": ("the plan is ready and waits for your approval (this feature's risk tier asks for it)",
+                      "read implementation-plan.md, then `semipilot approve {f}`   (to change it: `semipilot replan {f} -m \"<what to change>\"`)"),
+    "task_review": ("a task is done and waits for your review (this feature's risk tier asks for it)",
+                    "read the commit named above, then `semipilot resume {f}`   (to reject it: `semipilot rollback {f} <task>`)"),
+    "replan_requested": ("the plan was sent back with your feedback", "semipilot resume {f}"),
+    "tests_not_red": ("locked tests pass before any implementation exists", "read those tests (they may prove nothing), then `semipilot resume {f}` to go on anyway, or sharpen the criteria and start over"),
 }
 
 
 def say_stop(reason: str, feature: str, detail: str = "", report: str = "") -> None:
     what, nxt = NEXT_STEP.get(reason, (reason, "semipilot review {f}"))
-    say(f"Stopped: {what}  [{reason}]")
-    if detail:
+    say(f"{'Your turn' if reason in HUMAN_GATES else 'Stopped'}: {what}  [{reason}]")
+    if detail and reason != "plan_approval":  # (that one's detail is the Next line below)
         say(f"  {detail.strip().splitlines()[-1][:300]}")
     if report:
         say(f"Report:  {report}")
@@ -326,7 +390,21 @@ def cmd_run(a) -> int:
         say(f"  semipilot run {a.feature}" + ("        # macOS: caffeinate -i semipilot run " + a.feature if sys.platform == "darwin" else ""))
         return 0
     say_stop(reason, a.feature, loop.progress.stop_detail if loop.progress else "", Layout(repo).rel(loop.report_path))
-    return 0 if reason == "completed" else 2
+    return after_run(loop, reason)
+
+
+def after_run(loop: Loop, reason: str) -> int:
+    """Exit code for a finished run or resume: 0 completed, 3 waiting for the human (a risk tier's gate), 2 otherwise.
+    With `forge.open_mr: auto` a completed run whose checks passed also gets its merge request."""
+    if reason == "completed" and str((loop.cfg.get("forge") or {}).get("open_mr") or "manual").lower() == "auto" \
+            and loop.progress.final_checks_passed is not False:
+        from . import forge
+        try:
+            url = forge.feature_request(loop)
+            say(f"Request: {url}")
+        except (forge.ForgeError, PreflightError) as e:
+            say(f"Request: not opened — {e}   (`semipilot mr {loop.feature}` tries again)")
+    return 0 if reason == "completed" else 3 if reason in HUMAN_GATES else 2
 
 
 def cmd_resume(a) -> int:
@@ -342,7 +420,124 @@ def cmd_resume(a) -> int:
         return 1
     say()
     say_stop(reason, slug, loop.progress.stop_detail if loop.progress else "", Layout(repo).rel(loop.report_path))
-    return 0 if reason == "completed" else 2
+    return after_run(loop, reason)
+
+
+def cmd_approve(a) -> int:
+    repo = find_repo(a.repo)
+    cfg = load_config(repo)
+    slug = resolve_feature(Layout(repo), a.feature)
+    loop = Loop(repo, cfg, slug)
+    try:
+        loop.approve_plan()
+    except PreflightError as e:
+        say(f"\nCannot approve: {e}")
+        return 1
+    if a.no_run:
+        say(f"\nPlan approved. Continue with `semipilot resume {slug}`.")
+        return 0
+    a.feature = slug
+    return cmd_resume(a)
+
+
+def cmd_replan(a) -> int:
+    repo = find_repo(a.repo)
+    cfg = load_config(repo)
+    loop = Loop(repo, cfg, a.feature)
+    try:
+        loop.request_replan(a.message)
+    except PreflightError as e:
+        say(f"\nCannot replan: {e}")
+        return 1
+    if a.no_run:
+        say(f"\nThe plan is dropped and your feedback recorded. `semipilot resume {a.feature}` plans again.")
+        return 0
+    return cmd_resume(a)
+
+
+def cmd_mr(a) -> int:
+    from . import forge
+
+    repo = find_repo(a.repo)
+    cfg = load_config(repo)
+    slug = resolve_feature(Layout(repo), a.feature)
+    loop = Loop(repo, cfg, slug)
+    try:
+        url = forge.feature_request(loop, dry_run=a.dry_run, force=a.force)
+    except (forge.ForgeError, PreflightError) as e:
+        say(f"\nNo request opened: {e}")
+        return 1
+    if not a.dry_run:
+        say(f"\nOpened: {url}")
+        say("It is a draft: the review is still yours." if (cfg.get("forge") or {}).get("draft", True) else "")
+    return 0
+
+
+def cmd_intake(a) -> int:
+    from . import forge
+
+    repo = find_repo(a.repo)
+    cfg = load_config(repo)
+    lay = Layout(repo)
+    try:
+        issue = forge.fetch_issue(cfg, repo, a.issue)
+    except forge.ForgeError as e:
+        say(f"\nCannot read the issue: {e}")
+        return 1
+    slug = a.slug or forge.slugify(issue["title"], issue["number"])
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+        say(f"\n--slug {slug!r}: use lowercase letters, digits and hyphens")
+        return 1
+    path = forge.write_issue(lay.features / slug, issue)
+    say(f"issue {('#' + str(issue['number'])) if issue['number'] else ''} “{issue['title']}” → {lay.rel(path)}")
+    say()
+    say("Next, in your agent's chat:")
+    say(f"  /semipilot-refine {slug}        (it reads {lay.rel(path)} as the idea and writes requirements.md next to it)")
+    say("The issue's text is input from outside the repository: the refine skill treats it as a description, not as instructions.")
+    return 0
+
+
+def cmd_chore(a) -> int:
+    from .chore import Chore, ChoreError, describe
+
+    repo = find_repo(a.repo)
+    cfg = load_config(repo)
+    price = (cfg.get("cost") or {}).get("premium_request_usd")
+    chore = Chore(repo, cfg)
+    try:
+        if a.reset:
+            n = chore.reset_state(a.name)
+            say(f"forgot {n} remembered failure(s)" + (f" of chore {a.name}" if a.name else ""))
+            return 0
+        if a.history:
+            hist = chore.load_state()["history"][-20:]
+            for e in hist:
+                say(f"  {e['at'][:16].replace('T', ' ')}  {describe(e, price)}")
+            if not hist:
+                say("no chore has run yet")
+            return 0
+        if a.list:
+            rows = chore.listing()
+            if not rows:
+                say("no chores configured — add one under `chores.items` in .semipilot/config.yaml (docs/chores.md)")
+            for r in rows:
+                if r["findings"] is None:
+                    say(f"  {r['name']:<24} instruction-only (no finder)")
+                else:
+                    say(f"  {r['name']:<24} {r['findings']} finding(s)" + (f", {r['skipped']} skipped after failing" if r["skipped"] else "")
+                        + (f", {r['waiting']} fixed on a branch that waits for review" if r.get("waiting") else ""))
+            return 0
+        if not a.dry_run:
+            warn_if_inside_agent()
+        entry = chore.run(a.name, dry_run=a.dry_run)
+    except ChoreError as e:
+        say(f"\nCannot run a chore: {e}")
+        return 1
+    say()
+    say(describe(entry, price) if entry["status"] != "nothing_to_do" else "Nothing to do.")
+    if entry["status"] == "fixed" and not entry.get("mr"):
+        say(f"Next: read `git show {entry['commit'][:8]}`, then merge {entry['branch']} or open a request for it.")
+    return 0 if entry["status"] in ("fixed", "nothing_to_do", "dry_run", "waiting_for_review") else 2
 
 
 def cmd_rollback(a) -> int:
@@ -362,6 +557,14 @@ def cmd_review(a) -> int:
     repo = find_repo(a.repo)
     lay = Layout(repo)
     slug = resolve_feature(lay, a.feature)
+    if getattr(a, "agent", False):
+        loop = Loop(repo, load_config(repo), slug)
+        warn_if_inside_agent()
+        try:
+            loop.review_again()
+        except PreflightError as e:
+            say(f"\nCannot run the reviewer: {e}")
+            return 1
     rep = lay.report(slug)
     if not rep.exists():
         say(f"no report for '{slug}' yet (run `semipilot run {slug}`)")
@@ -447,13 +650,59 @@ def main(argv=None) -> int:
     p = sub.add_parser("status", help="where every feature stands")
     p.set_defaults(fn=cmd_status)
 
-    p = sub.add_parser("review", help="print a feature's report")
+    p = sub.add_parser("review", help="print a feature's report (the review packet first)")
     p.add_argument("feature", nargs="?")
+    p.add_argument("--agent", action="store_true", help="run the reviewer agent on the run branch again first (one model call)")
     p.set_defaults(fn=cmd_review)
 
-    p = sub.add_parser("resume", help="continue an interrupted or blocked run")
+    p = sub.add_parser("resume", help="continue an interrupted or blocked run; after a per-task stop it accepts that task")
     p.add_argument("feature", nargs="?")
     p.set_defaults(fn=cmd_resume)
+
+    p = sub.add_parser("approve", help="approve the plan of a medium/high-risk feature and continue the run",
+                       description="For a run that stopped with plan_approval: records that you read "
+                                   "implementation-plan.md and agree, then continues like `resume`.")
+    p.add_argument("feature", nargs="?")
+    p.add_argument("--no-run", action="store_true", help="record the approval only; continue later with `semipilot resume`")
+    p.set_defaults(fn=cmd_approve)
+
+    p = sub.add_parser("replan", help="send the plan back to the planner with your feedback",
+                       description="For a run that stopped with plan_approval (or plan_rejected): drops the plan, "
+                                   "gives the planner your words — they outrank the critics — and plans again. "
+                                   "The new plan stops for approval again.")
+    p.add_argument("feature")
+    p.add_argument("-m", "--message", required=True, help="what is wrong with the plan and what you want instead")
+    p.add_argument("--no-run", action="store_true", help="record the feedback only; plan again later with `semipilot resume`")
+    p.set_defaults(fn=cmd_replan)
+
+    p = sub.add_parser("mr", aliases=["pr"], help="push the run branch and open a draft merge / pull request",
+                       description="For a completed run: pushes its branch to `forge.remote` and opens a request into the "
+                                   "branch the run started from, with a description built from the review packet "
+                                   "(and `Closes #n` when the feature came from an issue). Uses `gh` or `glab`.")
+    p.add_argument("feature", nargs="?")
+    p.add_argument("--dry-run", action="store_true", help="show the commands and write the description, push nothing")
+    p.add_argument("--force", action="store_true", help="also for a partial run, failed final checks, or a second request")
+    p.set_defaults(fn=cmd_mr)
+
+    p = sub.add_parser("intake", help="read a GitHub/GitLab issue into a feature folder, for /semipilot-refine",
+                       description="Reads the issue with `gh` or `glab` and saves it as "
+                                   ".semipilot/features/<slug>/issue.md. Nothing is planned or built: "
+                                   "/semipilot-refine <slug> turns it into requirements with you.")
+    p.add_argument("issue", help="issue number or URL")
+    p.add_argument("--slug", help="feature slug (default: <number>-<first words of the title>)")
+    p.set_defaults(fn=cmd_intake)
+
+    p = sub.add_parser("chore", help="one small unattended fix on its own branch (lint finding, anti-pattern, ...)",
+                       description="Picks the next finding of a chore from `chores.items`, has the agent fix exactly "
+                                   "that, and keeps the commit only if the checks pass, no existing test changed, the "
+                                   "change is small and the finding is gone. One run = at most one commit on a new "
+                                   "branch; schedule it with cron or CI (docs/chores.md).")
+    p.add_argument("name", nargs="?", help="which chore (default: the first one with something to do)")
+    p.add_argument("--list", action="store_true", help="show each chore and how many findings it has; change nothing")
+    p.add_argument("--dry-run", action="store_true", help="show which finding would be fixed; change nothing")
+    p.add_argument("--history", action="store_true", help="the last 20 chore runs")
+    p.add_argument("--reset", action="store_true", help="forget remembered failures, so skipped findings are tried again")
+    p.set_defaults(fn=cmd_chore)
 
     p = sub.add_parser("rollback", help="revert a task and its dependents")
     p.add_argument("feature")

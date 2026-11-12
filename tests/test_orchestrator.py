@@ -703,7 +703,7 @@ def test_preflight_makes_no_model_call_of_its_own(h):
     h.scenario()
     h.run()
     assert not any("Reply with exactly" in c["prompt"] for c in h.calls())
-    assert len(h.calls()) == 1 + 1 + 2 + 1 + 2  # questions, plan, 2 critics, test-writer, 2 tasks
+    assert len(h.calls()) == 1 + 1 + 2 + 1 + 2 + 1  # questions, plan, 2 critics, test-writer, 2 tasks, reviewer
 
 
 def test_missing_agent_cli_fails_preflight_for_free(h):

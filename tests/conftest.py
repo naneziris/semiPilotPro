@@ -66,6 +66,9 @@ ADD_OK = "def add(a, b):\n    return a + b\n"
 ADD_BAD = "def add(a, b):\n    return a - b\n"
 MUL_OK = "def mul(a, b):\n    return a * b\n"
 ACCEPT = {"exit": 0, "stdout": json.dumps({"verdict": "accept", "issues": []})}
+REVIEW_OK = {"verdict": "ship", "summary": "Two pure functions with one test each; nothing a human must know.",
+             "rubric": [{"id": "spec_fidelity", "score": "pass", "evidence": "calc/add.py:1 — returns a + b"}],
+             "findings": [], "read_first": ["calc/add.py — the only logic"]}
 
 
 def task_of(prompt: str) -> str:
@@ -110,6 +113,8 @@ class Harness:
         self.cfg["runner"]["call_timeout_seconds"] = 30
         self.cfg["state_dir"] = str(self.state)
         self.cfg["infra"].update({"backoff_start_seconds": 0.01, "backoff_cap_seconds": 0.02})
+        # never read the real ~/.copilot of whoever runs the tests
+        self.cfg["harnesses"]["copilot"]["usage"]["session_state_dir"] = str(tmp_path / "copilot-sessions")
         self.cfg["checks"] = [
             # syntax check without writing .pyc files: compileall's bytecode could outlive a same-size, same-second
             # rewrite of a module between two attempts and make the tests see the old code
@@ -125,7 +130,7 @@ class Harness:
         return self._git(*a)
 
     def scenario(self, implementer_t1=None, implementer_t2=None, test_writer=None, planner=None, critics=None,
-                 questions=None, extra=None):
+                 questions=None, extra=None, reviewer=None):
         responses = {
             "questions-only mode": questions or [step(stdout=NO_QUESTIONS)],
             "Output \\*\\*only\\*\\* a JSON object matching": planner or [step(stdout=json.dumps(PLAN))],
@@ -134,6 +139,7 @@ class Harness:
             "You are the test-writer": test_writer or [step(actions=[write("tests/test_calc.py", TEST_FILE_GOOD), write("tests/test_mul.py", TEST_FILE_MUL)])],
             "Implement \\*\\*only task T1\\*\\*": implementer_t1 or [step(actions=[write("calc/__init__.py", ""), write("calc/add.py", ADD_OK)])],
             "Implement \\*\\*only task T2\\*\\*": implementer_t2 or [step(actions=[write("calc/mul.py", MUL_OK)])],
+            "You are the reviewer": reviewer or [step(stdout=json.dumps(REVIEW_OK))],
         }
         responses.update(extra or {})
         self.scenario_path.write_text(json.dumps({"responses": responses}))
@@ -143,6 +149,17 @@ class Harness:
 
     def loop(self, cfg=None):
         return orch.Loop(self.repo, cfg or self.cfg, FEATURE, sleep_fn=self.sleeps.append)
+
+    def set_spec(self, **frontmatter):
+        """Rewrite the approved spec with extra frontmatter keys (e.g. risk="medium") and commit it."""
+        extra = "".join(f"{k}: {v}\n" for k, v in frontmatter.items())
+        (self.feat / "requirements.md").write_text(SPEC.replace("status: approved\n", "status: approved\n" + extra))
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "spec")
+
+    def do(self, fn):
+        """Run a Loop method from inside the project, like the CLI does."""
+        return self._in_repo(fn)
 
     def _in_repo(self, fn):
         cwd = os.getcwd()
@@ -182,6 +199,12 @@ class Harness:
 def h(tmp_path, request):
     """A throwaway repo with an approved spec; every test using it runs once per supported harness."""
     return Harness(tmp_path, harness=request.param)
+
+
+@pytest.fixture
+def hc(tmp_path):
+    """The same throwaway repo on the Copilot harness only — for behaviour that does not depend on the agent CLI."""
+    return Harness(tmp_path, harness="copilot")
 
 
 @pytest.fixture(params=HARNESSES)

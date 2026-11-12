@@ -8,11 +8,16 @@ the git root. `--repo <path>` (before the command) points it elsewhere.
 | `semipilot init [--harness copilot\|claude] [--skills copilot,claude\|both] [--here] [--force]` | Config, the skill pack, `AGENTS.md` if you have no instructions file | 0 |
 | `semipilot doctor [--live]` | Checks config, harness installed, skills, instructions, checks, knowledge layer; `--live` adds one small model call to check the login | 0 ok · 1 something to fix |
 | `semipilot preflight <feature>` | All run checks + the planner's questions; no branch is created | 0 ready · 3 questions to answer · 1 cannot start |
-| `semipilot run <feature> [--branch NAME] [--stack] [--no-questions]` | The loop, on a new branch from the current one (alias `pilotinloop`) | 0 completed · 2 stopped (incl. `completed_with_blocked`) · 3 questions · 1 cannot start |
+| `semipilot run <feature> [--branch NAME] [--stack] [--no-questions]` | The loop, on a new branch from the current one (alias `pilotinloop`) | 0 completed · 3 your turn (questions, `plan_approval`, `task_review`) · 2 stopped otherwise (incl. `completed_with_blocked`) · 1 cannot start |
 | `semipilot status` | Every feature's stage and the next command | 0 |
-| `semipilot review [feature]` | Prints `report.md` (default: the last run) | 0 · 1 no report |
-| `semipilot resume [feature]` | Continues on the run's branch at the stage that stopped (planning, tests or tasks); blocked tasks get fresh attempts | 0 completed · 2 stopped · 1 cannot resume |
+| `semipilot review [feature] [--agent]` | Prints `report.md`, the review packet first (default: the last run); `--agent` runs the reviewer agent again first | 0 · 1 no report / cannot run |
+| `semipilot resume [feature]` | Continues on the run's branch at the stage that stopped (planning, tests or tasks); blocked tasks get fresh attempts; after a `task_review` stop it accepts that task | 0 completed · 3 your turn · 2 stopped · 1 cannot resume |
+| `semipilot approve [feature] [--no-run]` | Records your approval of the plan (a `plan_approval` stop) and continues like `resume`; `--no-run` only records it | as `resume` · 1 nothing to approve |
+| `semipilot replan <feature> -m "<text>" [--no-run]` | Drops the plan, gives the planner your words (above the critics'), plans again; the new plan stops for approval | as `resume` · 1 refused |
 | `semipilot rollback <feature> <task>` | Reverts a task and every task depending on it; marks them pending | 0 · 1 refused |
+| `semipilot intake <issue> [--slug NAME]` | Reads a GitHub/GitLab issue (number or URL) into `.semipilot/features/<slug>/issue.md` for `/semipilot-refine` | 0 · 1 could not read it |
+| `semipilot mr [feature] [--dry-run] [--force]` | Pushes the run branch and opens a draft merge / pull request from the review packet (alias `pr`) | 0 · 1 refused or failed |
+| `semipilot chore [name] [--list] [--dry-run] [--history] [--reset]` | One small unattended fix on its own branch | 0 fixed / nothing to do / waiting for review · 2 did not pass · 1 cannot start |
 | `semipilot kb init [--system PREFIX] [--force]` | Installs the knowledge layer | 0 |
 | `semipilot kb <validate\|index\|resolve\|drift\|guard\|catchup> …` | Runs `scripts/kb/kb.py` (or the bundled copy) | as `kb.py` |
 | `semipilot config` | Prints the effective configuration | 0 |
@@ -31,6 +36,15 @@ committed for you); the run branch exists (`--branch` names another); you are on
 (`--stack` builds on top of it on purpose); `checks` contain a TODO; the knowledge layer is unhealthy or a tag is
 unknown; the agent CLI is not installed. (A login problem shows up on the first real call — the planner's questions —
 and stops cleanly before any branch exists.) `--no-questions` skips the planner's questions; it logs assumptions instead.
+
+**`approve`, `replan`.** Only for a run stopped with `plan_approval` (`replan` also after `plan_rejected`). Both switch
+to the run branch themselves. See [autonomy.md](autonomy.md).
+
+**`mr`, `intake`.** Use `gh` or `glab`, detected from the `origin` remote or set in `forge.provider`. `mr` is the only
+command that pushes. See [forge.md](forge.md).
+
+**`chore`.** One run = at most one commit on a new `chore/…` branch, then back to the branch you started from. See
+[chores.md](chores.md).
 
 **`rollback`.** Adds `git revert` commits for the task and its dependents (in reverse order) and resets their state.
 It refuses on a dirty tree. A conflicting revert stops with a message; resolve it by hand.

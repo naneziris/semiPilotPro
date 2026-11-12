@@ -1,6 +1,7 @@
 ---
 feature: export-orders-csv
 type: feat
+risk: low
 status: draft
 ---
 # Requirement: Export the orders list as CSV

@@ -6,9 +6,9 @@ with a `SKILL.md` (YAML frontmatter + instructions) and supporting `references/`
 
 | Skill | Use it to | Invoke |
 |---|---|---|
-| [`semipilot-refine`](../skills/semipilot-refine/) | turn an idea into `requirements.md` with tagged acceptance criteria | `/semipilot-refine <idea>` |
-| [`semipilot-spec-critic`](../skills/semipilot-spec-critic/) | Gate 1: review the spec; record your approval | `/semipilot-spec-critic [feature]`, then `approve` |
-| [`semipilot-run`](../skills/semipilot-run/) | preflight, the planner's questions, status, report walk-through, rollback/resume | `/semipilot-run review <feature>` |
+| [`semipilot-refine`](../skills/semipilot-refine/) | turn an idea — or an issue fetched with `semipilot intake` — into `requirements.md` with tagged acceptance criteria and a risk tier | `/semipilot-refine <idea>` |
+| [`semipilot-spec-critic`](../skills/semipilot-spec-critic/) | Gate 1: review the spec and its risk tier; record your approval | `/semipilot-spec-critic [feature]`, then `approve` |
+| [`semipilot-run`](../skills/semipilot-run/) | preflight, the planner's questions, plan approval and task review, status, the review packet walk-through, rollback/resume, the merge request | `/semipilot-run review <feature>` |
 | [`semipilot-scribe`](../skills/semipilot-scribe/) | after review: update cards, ADRs, dependencies, changelog from the plan's list | `/semipilot-scribe <feature>` |
 | [`semipilot-knowledge`](../skills/semipilot-knowledge/) | bootstrap and maintain the knowledge layer; impact analysis; AGENTS.md | `/semipilot-knowledge bootstrap` |
 

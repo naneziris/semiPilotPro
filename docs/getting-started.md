@@ -15,7 +15,7 @@ From nothing to a reviewed feature branch. Allow 15 minutes for setup, then the 
 ## Install
 
 ```bash
-pipx install git+https://github.com/naneziris/semiPilotPro.git@v5
+pipx install git+https://github.com/naneziris/semiPilotPro.git@v6
 semipilot --version
 ```
 
@@ -23,12 +23,12 @@ semipilot --version
 
 The tool is pure Python and bundles its one runtime dependency, so a plain copy of the files runs as-is:
 
-1. Download the `v5` branch as a ZIP (GitHub → Code → Download ZIP, or
-   `https://github.com/naneziris/semiPilotPro/archive/refs/heads/v5.zip`) and unzip it anywhere. Keep the folder
+1. Download the `v6` branch as a ZIP (GitHub → Code → Download ZIP, or
+   `https://github.com/naneziris/semiPilotPro/archive/refs/heads/v6.zip`) and unzip it anywhere. Keep the folder
    whole: `bin/`, `src/` and `skills/` belong together.
 2. Run `bin/semipilot` (macOS/Linux) or `bin\semipilot.cmd` (Windows). Put `bin/` on your PATH if you can. If you
-   cannot change PATH, call the launcher by its full path (`~/tools/semiPilotPro-v5/bin/semipilot doctor`) or add a
-   shell alias (`alias semipilot=~/tools/semiPilotPro-v5/bin/semipilot`).
+   cannot change PATH, call the launcher by its full path (`~/tools/semiPilotPro-v6/bin/semipilot doctor`) or add a
+   shell alias (`alias semipilot=~/tools/semiPilotPro-v6/bin/semipilot`).
 
 Nothing is installed and nothing is written outside the folder; deleting the folder uninstalls it. Without the
 `jsonschema` package the plan is validated by shape only; pip/pipx installs get the full JSON-schema check.
@@ -154,15 +154,20 @@ Do not `run` again: the run branch and its checkpoint already exist, and `run` w
 semipilot review export-orders-csv
 ```
 
-Read the report in order: **assumptions** (`decisions.md`) first, then blocked tasks, completed tasks, check results,
-warnings. Then act:
+Read the report in order. It opens with the **review packet**: the risk tier, the reviewer agent's verdict, a
+*Read first* list, the evidence per acceptance criterion (criterion → test → task → commit, and whether the test
+failed before the code existed), where the change is, and a reading order commit by commit. Then **assumptions**
+(`decisions.md`), blocked tasks, completed tasks, check results, warnings. The reviewer agent points; it does not
+decide — read the commits. Then act:
 
 | Situation | Do |
 |---|---|
 | A wrong assumption in T3 | `semipilot rollback export-orders-csv T3` (reverts T3 and everything built on it), fix `requirements.md`, `semipilot resume export-orders-csv` |
 | A task is blocked with a question | Answer it in `requirements.md`, `semipilot resume …` |
 | Interrupted (outage, budget, quota) or stopped with `BLOCKED:` | Fix the cause or answer in `requirements.md`, `semipilot resume …` — it continues at the stage that stopped |
-| Happy | Review the diff, run `/semipilot-scribe export-orders-csv` if you have a knowledge layer, open the PR yourself |
+| The run stopped with `plan_approval` (medium/high risk) | Read `implementation-plan.md`; `semipilot approve export-orders-csv`, or `semipilot replan export-orders-csv -m "<what to change>"` |
+| The run stopped with `task_review` (high risk) | `git show <sha>` from the message; `semipilot resume …` to accept, `semipilot rollback … <task>` to reject |
+| Happy | Review the diff, run `/semipilot-scribe export-orders-csv` if you have a knowledge layer, then `semipilot mr export-orders-csv` (a draft request built from the packet) — or open the PR yourself |
 
 The `semipilot-run` skill does this walk-through with you in chat: `/semipilot-run review export-orders-csv`.
 
@@ -173,15 +178,18 @@ The `semipilot-run` skill does this walk-through with you in chat: `/semipilot-r
 ```
 .semipilot/config.yaml
 .semipilot/features/<feature>/
-    requirements.md            yours (written with the refiner, approved by you)
+    issue.md                   only after `semipilot intake`: the issue's text, as source material
+    requirements.md            yours (written with the refiner, approved by you) — names the risk tier
     open-questions.md          the planner's questions and your answers
     implementation-plan.md     the accepted plan: tasks, files, interfaces, Knowledge Updates Required
     plan.json                  the same, machine-readable (kept outside the repo during the run)
     decisions.md               every assumption the loop made — read first
     rejection-log.md           what the critics rejected
-    report.md                  the report
+    report.md                  the report, opening with the review packet
     implementation-progress.json   checkpoint for resume / rollback
-.semipilot/runs/<run-id>/      one log per agent call: prompt, answer, output, classification (git-ignored)
+.semipilot/runs/<run-id>/      one log per agent call: prompt, answer, output, classification; calls.jsonl with
+                               role, duration and usage per call (git-ignored)
 ```
 
-Next: [concepts.md](concepts.md) for how and why it works this way.
+Next: [concepts.md](concepts.md) for how and why it works this way, [autonomy.md](autonomy.md) for risk tiers and
+the review gate, [chores.md](chores.md) for small unattended fixes, [forge.md](forge.md) for issues and merge requests.

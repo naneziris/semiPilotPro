@@ -1,7 +1,10 @@
 """The semipilot loop: plan → critique → locked tests → implement task by task → checks → report.
 
 The orchestrator owns the loop. The agent never decides that work is done: done == all configured checks pass.
-Humans sit at the front (requirements, Gate 1 approval, answered questions) and at the back (report review).
+Humans sit at the front (requirements, Gate 1 approval, answered questions) and at the back (report review) — and,
+for a feature whose risk tier asks for it (risk.py), in the middle: one stop to approve the plan (medium), one
+stop after every task (high). After the last task a read-only reviewer grades the diff against a rubric and the
+report opens with a review packet (review.py).
 
 Layout inside a repo (see config.Layout):
     .semipilot/config.yaml                 the only file a user edits
@@ -35,12 +38,17 @@ from typing import Optional
 
 from .config import (INSTRUCTION_CANDIDATES, Layout, instructions_file, kb_commands, knowledge_layer_present, local_set,
                      sync_excludes)
+from . import review as review_mod
+from . import risk as risk_mod
+from . import usage as usage_mod
 from .harness import UnknownHarnessError, get_harness
 from .runner import AGENT_UNAVAILABLE, OK, HaltRun, Runner
 
 LEGACY_AGENT_UNAVAILABLE = "copilot_unavailable"  # stop reason written by v0.1
 ROLE_FOR = {"planner-questions": "planner", "planner-plan": "planner", "plan-fidelity-critic": "plan-fidelity-critic",
-            "plan-critic": "plan-critic"}
+            "plan-critic": "plan-critic", "reviewer": "reviewer"}
+# Stop reasons that mean "a human has to look before the run goes on" (a risk tier's gate), not a failure.
+HUMAN_GATES = ("plan_approval", "task_review")
 TASK_HEADING = "# Your task"
 
 
@@ -543,10 +551,20 @@ class Progress:
     warnings: list = field(default_factory=list)
     check_results: list = field(default_factory=list)
     final_checks_passed: Optional[bool] = None
+    # ---- since 0.3
+    base_branch: Optional[str] = None                 # the branch the run was started from (the MR's target)
+    risk: dict = field(default_factory=dict)          # risk.assess(): declared / effective tier, gates
+    plan_approval: dict = field(default_factory=dict)  # {"at", "plan_sha"} once a human approved the plan
+    plan_feedback: str = ""                           # a human's `replan -m` text, handed to the planner once
+    red_check: dict = field(default_factory=dict)     # task id → "red" | "green" | "skipped" (tests before the code)
+    review: dict = field(default_factory=dict)        # the reviewer agent's normalised verdict (review.py)
+    mr: dict = field(default_factory=dict)            # {"url", "at"} once `semipilot mr` opened one
 
     @classmethod
     def load(cls, path: Path) -> "Progress":
-        return cls(**json.loads(path.read_text(encoding="utf-8")))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        known = {f for f in cls.__dataclass_fields__}  # a checkpoint from a newer semipilot may carry more
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -633,12 +651,15 @@ class Loop:
         return any(path == m or path.startswith(m) for m in self.managed())
 
     def make_runner(self) -> Runner:
+        previous = self.runner
         carried = self.runner.cost_usd if self.runner else 0.0  # preflight calls count toward the run's cost
         carried_roles = dict(self.runner.cost_by_role) if self.runner else {}
         self.runner = Runner(self.cfg, self.run_dir(), sleep_fn=self.sleep, cwd=self.repo,
                              reset_tree_fn=lambda: self.reset_tree("infra failure"))
         self.runner.cost_usd = carried
         self.runner.cost_by_role = carried_roles
+        if previous is not None:
+            self.runner.ledger = previous.ledger
         return self.runner
 
     def instructions(self) -> tuple[str, str]:
@@ -680,6 +701,10 @@ class Loop:
             self.log(f"reset tree to {sha[:8]} ({why}); discarded: {', '.join(discarded)}")
             self.progress.warnings.append(f"tree reset ({why}) discarded {len(discarded)} file(s): {', '.join(discarded)}")
 
+    def code_dirty(self) -> bool:
+        """Uncommitted changes outside semipilot's own state files (those are uncommitted for most of a run)."""
+        return any(not self.is_managed(f) for f in self.git.status_paths())
+
     def elapsed_min(self) -> float:
         return (time.monotonic() - self.t_start) / 60 + float(self.progress.budget.get("elapsed_min_before_resume", 0))
 
@@ -695,9 +720,19 @@ class Loop:
                 for role, usd in self.runner.cost_by_role.items():
                     by_role[role] = round(by_role.get(role, 0) + usd, 4)
                 self.progress.budget["cost_by_role"] = by_role
+            self.progress.budget["usage"] = self.usage_summary()
         self.progress.test_lock = self.lock.to_json()
         self.progress.save(self.progress_path)
         self.lay.last_run.write_text(self.feature + "\n", encoding="utf-8")
+
+    def usage_summary(self) -> dict:
+        """Calls, time and reported usage per role for the whole run (earlier sessions of it included)."""
+        now = self.runner.ledger.summary() if self.runner else {}
+        return usage_mod.merge(self.progress.budget.get("usage_before_resume"), now)
+
+    def premium_price(self) -> Optional[float]:
+        price = (self.cfg.get("cost") or {}).get("premium_request_usd")
+        return float(price) if isinstance(price, (int, float)) and price > 0 else None
 
     def spec_text(self) -> str:
         return self.spec_path.read_text(encoding="utf-8") if self.spec_path.exists() else ""
@@ -816,6 +851,15 @@ class Loop:
                                  + "\n  - ".join(untagged) + "\nEvery criterion must name a test, lint, typecheck or build check.")
         if not crit:
             raise PreflightError("no acceptance criteria found under an '## Acceptance criteria' heading")
+        try:
+            declared = risk_mod.declared_risk(fm)
+            risk_mod.default_risk(self.cfg)
+        except risk_mod.RiskError as e:
+            raise PreflightError(f"{self.spec_rel}: {e}")
+        if declared is None and (self.cfg.get("autonomy") or {}).get("require_risk"):
+            raise PreflightError(f"{self.spec_rel} names no risk tier. Add `risk: low | medium | high` to its frontmatter "
+                                 "(`/semipilot-spec-critic` checks it against the Impact Analysis); "
+                                 "`autonomy.require_risk` is on in .semipilot/config.yaml.")
         return crit
 
     def check_knowledge_layer(self) -> None:
@@ -893,8 +937,19 @@ class Loop:
         if not self.plan:
             return
         L = [f"# Implementation Plan — {self.feature}", "",
-             f"Generated by PilotInLoop run `{self.progress.run_id}` from `{self.spec_rel}`. Source of truth for the run: `plan.json`.", "",
-             "## Tasks", ""]
+             f"Generated by PilotInLoop run `{self.progress.run_id}` from `{self.spec_rel}`. Source of truth for the run: `plan.json`.", ""]
+        r = self.progress.risk or {}
+        if r.get("effective"):
+            why = f" (raised because the plan touches {', '.join(r['escalated_by'][:4])})" if r.get("escalated_by") else ""
+            gates = r.get("gates") or {}
+            asks = ("this plan waits for your approval before anything is built: `semipilot approve "
+                    f"{self.feature}`, or `semipilot replan {self.feature} -m \"<what to change>\"`"
+                    + (" — and the run stops after every task for you to read its commit" if gates.get("task_review") else "")
+                    ) if gates.get("plan_approval") else "the run does not stop for a human; the review is at the end"
+            L += [f"**Risk tier: {r['effective']}**{why} — {asks}.", "",
+                  "What to look at here: the decisions that will be hard to change later — interfaces, where things "
+                  "live, what depends on what, the order of the tasks.", ""]
+        L += ["## Tasks", ""]
         for t in topo_sort(self.plan["tasks"]):
             L += [f"### {t['id']} — {t['title']} ({t['size']})", "", t["description"], "",
                   f"- Depends on: {', '.join(t['depends_on']) or 'none'}",
@@ -1035,7 +1090,8 @@ class Loop:
         self.git.create_branch(branch)
         run_id = f"{self.feature}-{self.now().strftime('%Y%m%d-%H%M%S')}"
         self.progress = Progress(run_id=run_id, feature=self.feature, branch=branch,
-                                 started_at=self.now().isoformat(), base_commit=self.git.head())
+                                 started_at=self.now().isoformat(), base_commit=self.git.head(),
+                                 base_branch=base_branch)
         self.decisions_path.write_text(f"# Decisions — {self.feature} ({run_id})\n\n"
                                        "Assumptions the loop made where the spec was silent. Read before the diff.\n\n",
                                        encoding="utf-8")
@@ -1044,9 +1100,11 @@ class Loop:
         self.log(f"run {run_id} on branch {branch} (from {base_branch})")
         try:
             self.stage_plan(crit)
+            self.gate_plan()
             self.stage_tests(crit)
             self.stage_implement()
             self.progress.stop_reason = self.progress.stop_reason or self.end_reason()
+            self.stage_review()
         except HaltRun as h:
             self.on_halt(h)
         finally:
@@ -1065,7 +1123,7 @@ class Loop:
                 if t["attempts"] > 0:
                     t["attempts"] -= 1
                     self.progress.budget["iterations_used"] = max(0, self.progress.budget["iterations_used"] - 1)
-        self.log(f"HALT: {h.reason} — {h.detail}")
+        self.log(f"{'waiting for you' if h.reason in HUMAN_GATES else 'HALT'}: {h.reason} — {h.detail}")
 
     def resume(self) -> str:
         cp = self.find_checkpoint()
@@ -1084,8 +1142,14 @@ class Loop:
         self.progress.budget["elapsed_min_before_resume"] = self.progress.budget.get("elapsed_min", 0)
         self.progress.budget["cost_usd_before_resume"] = self.progress.budget.get("cost_usd", 0)
         self.progress.budget["cost_by_role_before_resume"] = dict(self.progress.budget.get("cost_by_role") or {})
+        self.progress.budget["usage_before_resume"] = self.progress.budget.get("usage") or {}
+        if self.progress.stop_reason == "task_review":  # resuming after a per-task stop accepts the task just read
+            for t in self.progress.tasks:
+                if t.get("review") == "pending":
+                    t["review"] = "accepted"
         self.t_start = time.monotonic()  # an automatic resume after a retry window must not count the sleep
         self.progress.stop_reason = None
+        self.progress.stop_detail = ""
         self.lock.from_json(self.progress.test_lock)
         plan_path = self.sdir() / "plan.json"
         if not plan_path.exists() and self.lay.plan_json(self.feature).exists():
@@ -1105,12 +1169,14 @@ class Loop:
                           "scope_violations": 0})
         try:
             crit = self.criteria()
-            if self.plan is None:  # halted while planning (outage, quota, BLOCKED:): plan again
+            if self.plan is None:  # halted while planning (outage, quota, BLOCKED:, a human's replan): plan again
                 self.stage_plan(crit)
+            self.gate_plan()
             if self.progress.tests_commit is None:  # halted before the tests were locked: write them now
                 self.stage_tests(crit)
             self.stage_implement()
             self.progress.stop_reason = self.progress.stop_reason or self.end_reason()
+            self.stage_review()
         except HaltRun as h:
             self.on_halt(h)
         finally:
@@ -1128,7 +1194,7 @@ class Loop:
         self.commit_state()
         self.maybe_schedule_retry()
 
-    def commit_state(self) -> None:
+    def commit_state(self, what: Optional[str] = None) -> None:
         if self.private:  # the checkpoint and report stay local files; the run branch holds only the feature's code
             return
         if self.progress.branch and self.git.branch_exists(self.progress.branch) and self.git.current_branch() != self.progress.branch:
@@ -1139,7 +1205,7 @@ class Loop:
         paths.append(self.lay.rel(self.lay.root / ".gitignore"))
         self.git.run("add", "-A", "--", *paths)
         if self.git.run("diff", "--cached", "--name-only").strip():
-            self.git.run("commit", "-q", "--no-verify", "-m", self.commit_message(f"run state ({self.progress.stop_reason or 'update'})", kind="chore"))
+            self.git.run("commit", "-q", "--no-verify", "-m", self.commit_message(what or f"run state ({self.progress.stop_reason or 'update'})", kind="chore"))
 
     def maybe_schedule_retry(self) -> None:
         win = self.cfg["infra"].get("retry_window")
@@ -1157,6 +1223,9 @@ class Loop:
     # ------------------------------------------------------------------ plan + critique
     def stage_plan(self, crit: list[dict]) -> None:
         rejections_text, plan, accepted = "", None, False
+        if self.progress.plan_feedback:  # a human read the previous plan and asked for changes (`semipilot replan`)
+            rejections_text = ("### The human reviewer of your previous plan (this outranks the critics)\n"
+                               + self.progress.plan_feedback.strip())
         rounds = self.cfg["budget"]["max_critique_rounds"]
         for rnd in range(rounds):
             plan = self.call_planner(crit, rejections_text)
@@ -1166,11 +1235,17 @@ class Loop:
                 accepted = True
                 break
             rejections_text = "\n\n".join(f"### {v['critic']}\n" + "\n".join(f"- {i}" for i in v["issues"]) for v in verdicts if v["verdict"] != "accept")
+            if self.progress.plan_feedback:
+                rejections_text = ("### The human reviewer of an earlier plan (still applies; outranks the critics)\n"
+                                   + self.progress.plan_feedback.strip() + "\n\n" + rejections_text)
             self.append_rejection_log(rnd, verdicts)
         if not accepted:
             raise HaltRun("plan_rejected", f"critics rejected the plan {rounds} time(s); see {self.lay.rel(self.rejections_path)}")
         self.plan = plan
         (self.sdir() / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        self.progress.plan_feedback = ""
+        self.progress.plan_approval = {}  # a new plan is a new thing to approve
+        self.assess_risk()
         self.render_implementation_plan()
         self.progress.tasks = [
             {"id": t["id"], "title": t["title"], "status": "pending", "attempts": 0, "commit": None,
@@ -1219,6 +1294,121 @@ class Loop:
                     for i in v["issues"]:
                         f.write(f"- {i}\n")
 
+    # ------------------------------------------------------------------ risk tier and its gates
+    def plan_sha(self) -> str:
+        return hashlib.sha256(json.dumps(self.plan, sort_keys=True).encode("utf-8")).hexdigest()[:16] if self.plan else ""
+
+    def assess_risk(self) -> dict:
+        """The feature's tier: `risk:` in the requirements (or the default), raised by the paths the plan touches."""
+        files = sorted({f for t in (self.plan or {}).get("tasks", []) for f in t.get("expected_files", [])})
+        try:
+            self.progress.risk = risk_mod.assess(parse_frontmatter(self.spec_text()), self.cfg, files)
+        except risk_mod.RiskError as e:
+            raise HaltRun("blocked", f"{self.spec_rel}: {e}")
+        r = self.progress.risk
+        if r.get("escalated_by"):
+            self.log(f"risk tier raised to {r['effective']}: the plan touches {', '.join(r['escalated_by'][:4])}")
+        return r
+
+    def gate_plan(self) -> None:
+        """Tiers with `plan_approval` stop here once: a human reads implementation-plan.md before any code exists."""
+        if not self.plan:
+            return
+        if not self.progress.risk:
+            self.assess_risk()
+        if not self.progress.risk.get("gates", {}).get("plan_approval"):
+            return
+        if self.progress.tests_commit is not None:  # already past the gate (a run started before the tier was raised)
+            return
+        if self.progress.plan_approval.get("plan_sha") == self.plan_sha():
+            return
+        plan_rel = self.lay.rel(self.lay.implementation_plan(self.feature))
+        raise HaltRun("plan_approval", f"risk tier {self.progress.risk['effective']}: read {plan_rel}, then "
+                                       f"`semipilot approve {self.feature}` (or `semipilot replan {self.feature} -m "
+                                       f"\"<what to change>\"`)")
+
+    def _load_for_gate(self, wanted: Optional[tuple], hint: str = "") -> None:
+        """Switch to the feature's run branch and load its checkpoint and plan; `wanted` = the stop reasons the
+        caller can act on (None = any)."""
+        cp = self.find_checkpoint()
+        if not cp or not self.git.branch_exists(cp[0]):
+            raise PreflightError(f"'{self.feature}' has no run to act on. Start one with `semipilot run {self.feature}`.")
+        branch = cp[0]
+        if self.git.current_branch() != branch:
+            if self.git.is_dirty():
+                raise PreflightError(f"the run is on branch {branch}, but you are on {self.git.current_branch()} with "
+                                     "uncommitted changes; commit or stash them first")
+            self.git.checkout(branch)
+            self.log(f"switched to the run branch {branch}")
+        self.progress = Progress.load(self.progress_path)
+        if wanted is not None and self.progress.stop_reason not in wanted:
+            raise PreflightError(f"'{self.feature}' is not ready for that: its run stopped with "
+                                 f"{self.progress.stop_reason or 'no stop reason'}"
+                                 + (f" — {hint}" if hint else " (see `semipilot status`)"))
+        plan_path = self.sdir() / "plan.json"
+        src = plan_path if plan_path.exists() else self.lay.plan_json(self.feature)
+        self.plan = json.loads(src.read_text(encoding="utf-8")) if src.exists() else None
+        self.lock.from_json(self.progress.test_lock)
+
+    def approve_plan(self) -> None:
+        """Record a human's approval of the accepted plan (a `plan_approval` stop). `resume` then continues."""
+        self._load_for_gate(("plan_approval",))
+        if not self.plan:
+            raise PreflightError("there is no plan to approve (plan.json is missing); `semipilot resume` plans again")
+        self.progress.plan_approval = {"at": self.now().isoformat(), "plan_sha": self.plan_sha()}
+        self.progress.save(self.progress_path)
+        self.commit_state("plan approved")
+        self.log(f"plan approved ({len(self.plan['tasks'])} tasks)")
+
+    def request_replan(self, feedback: str) -> None:
+        """A human read the plan and wants it changed: drop it and hand their words to the planner on `resume`."""
+        self._load_for_gate(("plan_approval", "plan_rejected"))
+        feedback = (feedback or "").strip()
+        if not feedback:
+            raise PreflightError("say what to change: `semipilot replan <feature> -m \"<what is wrong with the plan>\"`")
+        self.rejections_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.rejections_path, "a", encoding="utf-8") as f:
+            f.write(f"\n## {self.now().date()} — run {self.progress.run_id} — human review of the plan\n- {feedback}\n")
+        for path in (self.sdir() / "plan.json", self.lay.plan_json(self.feature)):
+            path.unlink(missing_ok=True)
+        self.plan = None
+        self.progress.tasks = []
+        self.progress.plan_approval = {}
+        self.progress.plan_feedback = feedback
+        self.progress.stop_reason = "replan_requested"
+        self.progress.save(self.progress_path)
+        self.commit_state("plan sent back for replanning")
+        self.log("plan dropped; the planner gets your feedback on resume")
+
+    # ------------------------------------------------------------------ review
+    def stage_review(self) -> None:
+        """After the last task: one read-only reviewer call (review.py). Advice for the human, never a gate."""
+        if self.progress.stop_reason not in ("completed", "completed_with_blocked"):
+            return
+        try:
+            review_mod.run_reviewer(self)
+        except Exception as e:  # noqa: BLE001 — the build is done; a broken reviewer must not turn it into a failure
+            self.progress.warnings.append(f"reviewer failed: {e}")
+            self.log(f"reviewer failed: {e}")
+        self.save()
+
+    def review_again(self) -> None:
+        """Run the reviewer on an existing run branch (`semipilot review <feature> --agent`)."""
+        self._load_for_gate(("completed", "completed_with_blocked", "task_review", "budget_exhausted"))
+        if self.git.is_dirty():
+            raise PreflightError("working tree is dirty; commit or stash before running the reviewer")
+        self.progress.budget["usage_before_resume"] = self.progress.budget.get("usage") or {}
+        self.progress.budget["cost_usd_before_resume"] = self.progress.budget.get("cost_usd", 0)
+        self.progress.budget["cost_by_role_before_resume"] = dict(self.progress.budget.get("cost_by_role") or {})
+        self.progress.budget["elapsed_min_before_resume"] = self.progress.budget.get("elapsed_min", 0)
+        self.t_start = time.monotonic()
+        self.make_runner()
+        self.progress.review = {}
+        review_mod.run_reviewer(self)
+        self.save()
+        self.write_report()
+        self.commit_state("reviewer run again")
+
     # ------------------------------------------------------------------ tests first
     def stage_tests(self, crit: list[dict]) -> None:
         prompt = self.prompt("test-writer", spec_path=self.spec_rel, questions_path=self.questions_rel,
@@ -1244,6 +1434,59 @@ class Loop:
         self.progress.tests_commit = sha
         self.log(f"locked {len(self.lock.checksums)} test file(s) at {sha[:8]}")
         self.save()
+        self.red_check(crit)
+        self.save()
+
+    def own_test_files(self, task: dict) -> list[str]:
+        """Locked test files that name one of this task's acceptance refs."""
+        refs = set(task["acceptance_checks"])
+        files = []
+        for f in sorted(self.lock.checksums):
+            fp = self.repo / f
+            if fp.exists() and any(r in fp.read_text(encoding="utf-8", errors="ignore") for r in refs):
+                files.append(f)
+        return files
+
+    def red_check(self, crit: list[dict]) -> None:
+        """Red before green: with no implementation yet, each task's locked tests must FAIL. A test that already
+        passes proves nothing about the change (or the behaviour exists already) — a person has to read it.
+        Also flags an acceptance ref that no locked test file names. `tests.red_check`: warn | halt | off."""
+        mode = str(self.cfg["tests"].get("red_check", "warn")).lower()
+        if mode in ("off", "false", "none"):
+            return
+        check_names = {str(c.get("name")) for c in self.cfg["checks"]}
+        scoped = [c["name"] for c in self.cfg["checks"] if "{task_tests}" in str(c.get("cmd", ""))]
+        all_text = ""
+        for f in self.lock.checksums:
+            try:
+                all_text += (self.repo / f).read_text(encoding="utf-8", errors="ignore") + "\n"
+            except OSError:
+                pass
+        missing = [c["ref"] for c in crit if c["ref"] not in check_names and c["ref"] not in all_text]
+        if missing:
+            self.progress.warnings.append("no locked test names the acceptance ref(s) " + ", ".join(missing)
+                                          + " — nothing checks those criteria")
+        green = []
+        for t in topo_sort(self.plan["tasks"]):
+            files = self.own_test_files(t)
+            if not scoped or not files:
+                self.progress.red_check[t["id"]] = "skipped"
+                continue
+            ok, _, _ = run_checks(self.cfg, self.repo, only=scoped, task_tests=files)
+            self.progress.red_check[t["id"]] = "green" if ok else "red"
+            if ok:
+                green.append(t["id"])
+                self.progress.warnings.append(f"{t['id']}: its locked tests ({', '.join(files)}) already pass before any "
+                                              "implementation — REVIEW: they may not test the change")
+        if self.code_dirty():  # a test run may leave files behind
+            self.reset_tree("after the red check")
+        if green:
+            self.log(f"red check: tests of {', '.join(green)} pass before any implementation")
+            if mode == "halt":
+                raise HaltRun("tests_not_red", f"the locked tests of {', '.join(green)} pass before any implementation; "
+                                               "read them, sharpen the criteria, then `semipilot resume`")
+        else:
+            self.log("red check: every task's locked tests fail before the implementation, as they should")
 
     # ------------------------------------------------------------------ implement loop
     def budget_exhausted(self) -> Optional[str]:
@@ -1252,6 +1495,14 @@ class Loop:
             return "budget_exhausted: max_iterations"
         if self.elapsed_min() * 60 >= b["wall_clock_seconds"]:
             return "budget_exhausted: wall_clock"
+        total = self.usage_summary().get("total") or {}
+        cap = b.get("max_premium_requests")
+        if cap and total.get("premium_requests", 0) >= cap:
+            return f"budget_exhausted: max_premium_requests ({total['premium_requests']:g} of {cap:g})"
+        cap = b.get("max_cost_usd")
+        spent = usage_mod.estimated_cost({"total": total}, self.premium_price())
+        if cap and spent is not None and spent >= cap:
+            return f"budget_exhausted: max_cost_usd (${spent:.2f} of ${float(cap):.2f})"
         return None
 
     def stage_implement(self) -> None:
@@ -1276,7 +1527,26 @@ class Loop:
                 self.progress.stop_reason = "budget_exhausted"
                 self.progress.stop_detail = "diff_cap_lines_per_run exceeded"
                 break
+            if self.stop_for_task_review(entry):
+                break
         self.final_checks()
+
+    def stop_for_task_review(self, entry: dict) -> bool:
+        """Tiers with `task_review` stop after every finished task but the last (the end of the run is the review of
+        the last one): a human reads that commit, then `resume` (accept) or `rollback` (reject)."""
+        if not (self.progress.risk or {}).get("gates", {}).get("task_review"):
+            return False
+        if entry["status"] != "done" or entry.get("review") == "accepted":
+            return False
+        if all(t["status"] == "done" for t in self.progress.tasks):
+            return False
+        entry["review"] = "pending"
+        self.progress.stop_reason = "task_review"
+        self.progress.stop_detail = (f"risk tier {self.progress.risk['effective']}: {entry['id']} is done — read "
+                                     f"`git show {(entry.get('commit') or '')[:8]}`, then `semipilot resume {self.feature}` "
+                                     f"(or `semipilot rollback {self.feature} {entry['id']}`)")
+        self.log(f"stopping for your review of {entry['id']}")
+        return True
 
     def run_task(self, task: dict, entry: dict) -> None:
         g = self.cfg["guardrails"]
@@ -1478,6 +1748,8 @@ class Loop:
         for t in targets:
             e = self.progress.task(t)
             e.update({"status": "pending", "attempts": 0, "commit": None, "blocked_reason": None, "diff": None})
+            e.pop("review", None)
+        self.progress.review = {}
         self.progress.stop_reason = "rolled_back"
         self.progress.save(self.progress_path)
         self.write_report()
@@ -1494,6 +1766,11 @@ class Loop:
         L = [f"# Report — {p.feature}", "", f"- Run `{p.run_id}` on branch `{p.branch}`",
              f"- Stop reason: **{p.stop_reason or 'running'}**{(' — ' + p.stop_detail) if p.stop_detail else ''}",
              f"- Tasks: {len(done)} done, {len(blocked)} blocked, {len(pending)} pending", ""]
+        if p.tasks:
+            try:
+                L += review_mod.packet(self)
+            except Exception as e:  # noqa: BLE001 — never lose the report over its first section
+                L += ["## 0. Review packet", "", f"_Could not be built: {e}_", ""]
         L += ["## 1. Assumptions (read these first)"]
         dec = self.decisions_text()
         L += [dec.strip() if "## D-" in dec else "_No assumptions logged — the spec answered everything the loop hit._", ""]
@@ -1514,6 +1791,18 @@ class Loop:
             L += [f"- Cost reported by the harness: ${b['cost_usd']:.2f} (all loop calls)"]
             if b.get("cost_by_role"):
                 L += ["  - by role: " + ", ".join(f"{r} ${v:.2f}" for r, v in sorted(b["cost_by_role"].items(), key=lambda x: -x[1]))]
+        used = b.get("usage") or {}
+        if (used.get("total") or {}).get("calls"):
+            price = self.premium_price()
+            L += [f"- Agent usage (all loop calls): {usage_mod.describe(used['total'], price)}"]
+            L += [f"  - {role}: {usage_mod.describe(r, price)}"
+                  for role, r in sorted(used.get("by_role", {}).items(), key=lambda x: -x[1].get("seconds", 0))]
+            t = used["total"]
+            if not any(k in t for k in ("cost_usd", "premium_requests", "input_tokens")):
+                L += ["  - The agent CLI reported no usage figures for these calls (time and call counts only); see "
+                      "docs/configuration.md > Cost."]
+            elif "premium_requests" in t and price is None:
+                L += ["  - Set `cost.premium_request_usd` in .semipilot/config.yaml to see premium requests as dollars."]
         i = p.infra or {}
         L += ["", "## 7. Infrastructure", f"- Harness: {i.get('harness', '?')}",
               f"- Transient agent failures: {i.get('transient_failures', 0)}",
@@ -1526,7 +1815,10 @@ class Loop:
               f"- Wrong assumption? `semipilot rollback {p.feature} T<n>` then fix the spec and `semipilot resume {p.feature}`",
               f"- Blocked or interrupted? answer in the spec / decisions, then `semipilot resume {p.feature}`",
               "- Happy? review the diff" + (", run the semipilot-scribe skill with implementation-plan.md (cards, ADRs, changelog)" if self.kl else "")
-              + ", then open the PR yourself (the loop never pushes). Draft below.", ""]
+              + f", then `semipilot mr {p.feature}` pushes the branch and opens a draft merge request (or open it "
+                "yourself; the loop never pushes on its own). Draft below.", ""]
+        if p.mr.get("url"):
+            L[-2:-2] = [f"- Merge request: {p.mr['url']}"]
         L += ["## 11. PR description draft", "", f"### {p.feature}", ""]
         if self.plan:
             L += [f"- {t['title']}" for t in self.plan["tasks"] if self.progress.task(t["id"])["status"] == "done"]

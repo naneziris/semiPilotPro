@@ -88,6 +88,48 @@ warning shows the failure; usually a new requirement or a fix by hand.
 The report's cost by role shows where it goes; see [harnesses.md](harnesses.md#cost-and-speed) for what to change, in
 order of effect.
 
+## Risk tiers, review, cost (0.3)
+
+**The run stopped with `plan_approval` and I did not set a risk tier.** The plan touches a path under
+`autonomy.escalate` (auth, billing, payments, migrations, SQL, CI workflows by default). The report's first lines
+name the files. Read `implementation-plan.md` and `semipilot approve <feature>`; to change which paths count, set
+`autonomy.escalate.medium` to your own list (`[]` for none).
+
+**`semipilot approve` says "not ready for that".** The run is not stopped at a plan-approval gate — `semipilot status`
+shows where it is. After a `task_review` stop the command is `semipilot resume`.
+
+**I approved the plan and it asks again.** The plan changed after the approval (a `replan`, or a run that had to
+plan again). An approval covers one plan, identified by its hash.
+
+**"its locked tests already pass before any implementation".** Read those test files. Either the test asserts
+nothing about the change (sharpen the criterion and start over), or the behaviour already exists (then the
+criterion is not new work). `resume` goes on regardless when `red_check` is `halt`.
+
+**The reviewer says `no verdict` / `did not run`.** Its answer had no JSON, or the call failed (quota, outage). The
+run itself is unaffected. `semipilot review <feature> --agent` runs it again; the raw answer is in
+`.semipilot/runs/<run-id>/reviewer.log`.
+
+**The reviewer's findings are wrong.** They can be: it is an agent grading against a rubric. Verify in the code,
+and if a kind of false alarm repeats, edit the rubric (`.semipilot/roles/reviewer.md`).
+
+**Copilot: "The agent CLI reported no usage figures".** No session file with a `session.shutdown` event was found
+for the calls under `harnesses.copilot.usage.session_state_dir` (`~/.copilot/session-state`). Check that the folder
+exists and gets a new `events.jsonl` when you run `copilot -p "hi" -s`; if your CLI keeps sessions elsewhere, point
+the key there. Otherwise try `usage.silent: false` (parses the stats block the CLI prints). Calls and minutes per
+role are always reported.
+
+**`semipilot mr`: "cannot tell where issues and merge requests live".** The `origin` URL has neither `github` nor
+`gitlab` in it. Set `forge.provider`. **"`glab` not found"**: install the forge's CLI and log in. **"the branch is
+pushed, but … could not open the request"**: the message is the CLI's own (often: a request for that branch already
+exists); open it by hand, or fix and run `semipilot mr <feature> --force`.
+
+**`semipilot chore` does nothing: "waiting for review".** `chores.max_open` chore branches exist locally and are not
+merged into the branch you are on. Merge or delete them (after merging on the forge: pull, then delete the local
+branch).
+
+**`semipilot chore`: "the checks fail on the starting branch".** A chore is verified by your checks; on a red base
+that is impossible. Fix the base first.
+
 ## Knowledge layer
 
 | Error | Fix |

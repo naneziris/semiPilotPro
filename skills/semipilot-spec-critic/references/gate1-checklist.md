@@ -1,6 +1,6 @@
 # Gate 1 checklist
 
-Work through all seven. A spec fails Gate 1 if any item fails; report all failures in one verdict so the refiner
+Work through all eight. A spec fails Gate 1 if any item fails; report all failures in one verdict so the refiner
 fixes them in one round.
 
 ## 1. Observable, tagged criteria
@@ -40,6 +40,16 @@ fixes them in one round.
 ## 7. Size
 - Plausibly ≤ 8 tasks of ≤ 5 files each.
 - **Reject when larger**, with a proposed first slice ("Slice 1: criteria 1–4; move 5–9 to a second requirements file").
+
+## 8. Risk tier
+- The frontmatter has `risk: low | medium | high`, and the *Impact Analysis* gives its reason.
+- The tier is not lower than the highest *Breakage risk* in the impact table.
+- It is not `low` when the change touches authentication or authorization, money, a data migration or deletion, or
+  a public contract another system uses — a green test run does not prove those right.
+- It is not `high` for a change whose mistakes the tests catch and a revert undoes (a human asked to read every
+  commit of a harmless change stops reading).
+- **Reject when:** the tier is missing, or too low for what the analysis itself says. A tier that seems too high is
+  a note for the reviewer, not a rejection.
 
 ## Not reasons to reject
 Wording preferences, formatting, a different but equally valid scope split, or anything the planner can decide

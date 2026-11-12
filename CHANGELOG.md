@@ -2,7 +2,81 @@
 
 All notable changes to semiPilot. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour, and say how in
-[docs/upgrading.md](docs/upgrading.md)). Branches: `v5` = 0.2.x, `v4` = 0.1.x, `v3` = the manual pipeline.
+[docs/upgrading.md](docs/upgrading.md)). Branches: `v6` = 0.3.x, `v5` = 0.2.x, `v4` = 0.1.x, `v3` = the manual pipeline.
+
+## [0.3.0] — 2026-11-12
+
+Where the human is. 0.2 had one level of autonomy for every feature and handed over a whole branch to review at
+the end. 0.3 makes autonomy a property of the feature, prepares the review, measures what a run costs, and adds a
+second, much smaller loop for work that can be verified without a person. Background:
+[docs/design/v6-loops-and-factories.md](docs/design/v6-loops-and-factories.md).
+
+### Added
+- **Risk tiers** — `risk: low | medium | high` in the requirements' frontmatter (`semipilot-refine` proposes it,
+  Gate 1 checks it). `medium` stops the run once after the critics accept the plan (`plan_approval`); `high` also
+  stops after every finished task (`task_review`). The plan's paths raise the tier (`autonomy.escalate`; by default
+  auth, billing, payments, migrations, SQL and CI workflows mean at least `medium`) and never lower it.
+  `autonomy.tiers` sets what each tier adds; `autonomy.require_risk` refuses requirements without a tier.
+- **`semipilot approve [feature]`** — records your approval of the plan (with the plan's hash; a changed plan needs
+  approval again) and continues. **`semipilot replan <feature> -m "<text>"`** — sends the plan back with your words,
+  which the planner gets above the critics'; the new plan stops for approval again.
+- **Red check** — right after the tests are locked, each task's tests run with no implementation and must fail. A
+  task whose tests already pass is flagged in the report (`tests.red_check: warn | halt | off`). The same step flags
+  an acceptance ref that no locked test names.
+- **Reviewer agent** — one read-only call after the last task grades the diff against a rubric (spec fidelity, test
+  honesty, boundaries, simplicity, failure handling, security and data, readability, assumptions), lists findings
+  by severity and names what to read first. Advice, never a gate: it cannot edit, cannot fail a run, and a blocker
+  or failed rubric item forces its verdict to *needs changes*. Override the rubric with
+  `.semipilot/roles/reviewer.md`; `semipilot review <feature> --agent` runs it again; `review.agent: false` turns
+  it off.
+- **Review packet** — `report.md` opens with section 0: risk tier, reviewer verdict, *needs attention*, *read
+  first*, evidence per acceptance criterion (criterion → test file → task → commit → red first?), where the change
+  is (files by size, each with the task that planned it), and a reading order commit by commit.
+- **Usage and cost on both harnesses** — calls and minutes per role always; dollars and tokens on Claude Code;
+  premium requests and tokens on Copilot CLI, read from the `session.shutdown` event in its session files (or, with
+  `harnesses.copilot.usage.silent: false`, from the stats block it prints). `cost.premium_request_usd` turns
+  requests into dollars. Totals in `implementation-progress.json` (`budget.usage`), one line per call in
+  `.semipilot/runs/<run-id>/calls.jsonl`.
+- **Spend caps** — `budget.max_cost_usd`, `budget.max_premium_requests`: the run stops between tasks.
+- **`semipilot chore [name]`** — one small unattended fix per run (`chores.items`: a `find` command and/or an
+  `instruction`). Kept only if: the checks pass on the base and after the fix, no existing test or instructions file
+  changed, the change is within `max_files` / `max_diff_lines`, and the finding is gone with fewer findings than
+  before. Remembers failures, never fixes a finding twice while its branch waits for review, and stops at
+  `max_open` unmerged chore branches. `--list`, `--dry-run`, `--history`, `--reset`.
+- **`semipilot intake <issue>`** — reads a GitHub or GitLab issue (`gh` / `glab`) into
+  `.semipilot/features/<slug>/issue.md`; `/semipilot-refine <slug>` uses it as the idea and treats its text as
+  data, not instructions.
+- **`semipilot mr [feature]`** (alias `pr`) — pushes the run branch and opens a draft request into the branch the
+  run started from, with a description built from the review packet and `Closes #n` when the feature came from an
+  issue. `forge.open_mr: auto` does it after a completed run; `chores.open_mr: true` for chores. `--dry-run`.
+- `status` shows *waiting for you* stages and the reviewer's verdict; `doctor` shows risk-tier settings, the forge
+  it detected and where Copilot usage is read from.
+- Docs: [autonomy.md](docs/autonomy.md), [chores.md](docs/chores.md), [forge.md](docs/forge.md).
+
+### Changed
+- Exit code **3** now also means a risk tier's gate (`plan_approval`, `task_review`), not only unanswered questions.
+- The loop makes one more call per run (the reviewer) and one scoped test run per task before implementing.
+- Skills 0.3.0: `semipilot-refine` proposes a risk tier and accepts an `issue.md` as the idea;
+  `semipilot-spec-critic` checks the tier (checklist item 8) and states it in its APPROVED block; `semipilot-run`
+  walks through plan approval, task review and the review packet, and may run `semipilot mr` when asked.
+- `resume` clears the previous stop detail; a checkpoint written by a newer semipilot no longer crashes an older
+  field set on load.
+- Agents still cannot push. `semipilot mr` (and the two `open_mr` settings) are the only paths by which a branch
+  leaves the machine, and the program pushes, not an agent.
+
+### Not verified against the real services
+- The Copilot usage readers (session files, stats block) follow the formats documented in the CLI's issue tracker;
+  they are tested against a fake CLI only. `doctor` says which source it will use; the report says when nothing was
+  reported.
+- `intake` and `mr` are tested against a fake `gh`/`glab` and a local bare remote. Use `semipilot mr --dry-run`
+  first; `forge.commands` replaces a command line that your CLI version does not accept.
+
+### Deliberately not added
+- **Parallel runs / worktrees.** The bottleneck is a person reading the result; running more loops deepens the
+  pile in front of them. One reviewed feature at a time.
+- **Production signals feeding the queue.** Out of scope until the loop itself has proven its worth.
+- **Cross-harness critics** (plan on one CLI, critique on the other). Left for later by decision.
+
 
 ## [0.2.2] — 2026-11-04
 

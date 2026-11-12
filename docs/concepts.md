@@ -8,21 +8,31 @@ Requirements mistakes are expensive: a misread idea becomes a large, coherent, w
 are cheap: a failing check is information, and a loop can act on it. So human time goes to intent (what, why, and
 how we will know it works) and to review; machines do the middle under rules they cannot negotiate.
 
+Two refinements since 0.3. **The middle is not the same for every feature**: a loop may run alone only as far as
+its result can be verified cheaply, so each feature carries a risk tier that says where a person looks —
+nowhere (`low`), at the plan (`medium`), at the plan and every task (`high`). And **the back is prepared**: the one
+step that does not scale is a person reading the result, so the report opens with a packet that tells them where to
+read first. Both are in [autonomy.md](autonomy.md).
+
 ## The flow
 
 | Step | Who | Where | Output |
 |---|---|---|---|
-| 1. Refine | you + `semipilot-refine` | agent chat | `requirements.md` (draft) — acceptance criteria tagged `[check: <ref>]` |
+| 0. Intake (optional) | `semipilot intake <issue>` | terminal | `issue.md` — the issue as source material |
+| 1. Refine | you + `semipilot-refine` | agent chat | `requirements.md` (draft) — acceptance criteria tagged `[check: <ref>]`, a proposed `risk:` tier |
 | 2. Gate 1 | `semipilot-spec-critic`, then **you** | agent chat | `status: approved` — the one approval |
 | 3. Questions | planner (questions-only), then **you** | terminal + editor | `open-questions.md`, answered |
 | 4. Plan | planner | loop | `plan.json` → `implementation-plan.md` |
 | 5. Gates 2a/2b | plan-fidelity critic, plan critic | loop | accept, or reject with fixes (2 rounds max) |
-| 6. Tests first | test-writer | loop | one locked test file per task, committed |
+| 5b. Plan approval | **you**, at `medium` and `high` risk | terminal | `semipilot approve`, or `semipilot replan -m "…"` |
+| 6. Tests first | test-writer, then the red check | loop | one locked test file per task, committed; each must fail before the code exists |
 | 7. Implement | implementer, one fresh process per task | loop | one commit per task, or a blocked task |
+| 7b. Task review | **you**, at `high` risk | terminal | `semipilot resume` (accept) or `semipilot rollback` after each task |
 | 8. Verify | the orchestrator | loop | your checks after every attempt; full suite at the end |
-| 9. Report | the orchestrator | loop | `report.md`, `decisions.md`, a PR draft |
+| 8b. Reviewer | reviewer, read-only, once | loop | a rubric verdict, findings, what to read first |
+| 9. Report | the orchestrator | loop | `report.md` opening with the review packet, `decisions.md`, a PR draft |
 | 10. Review | **you** (+ `semipilot-run`) | terminal + chat | rollback / resume / accept |
-| 11. Close | `semipilot-scribe`, then **you** | agent chat | cards and docs in sync; you open the PR |
+| 11. Close | `semipilot-scribe`, then **you** | agent chat + terminal | cards and docs in sync; `semipilot mr` opens the draft request |
 
 ## Tagged acceptance criteria
 
@@ -45,6 +55,8 @@ This is the contract that lets the middle run unattended:
 | test-writer | write | criteria, task interfaces, test conventions | locked tests, one file per task |
 | implementer | write | **one task only**, requirements, answers, decisions, the locked tests' names | code for that task |
 | test-fixer | write | a contract error (import/name/signature) in a locked test | a minimal, logged fix — never an assertion change |
+| reviewer | read | requirements, answers, decisions, the plan, the whole diff (read-only git) | `{"verdict", "rubric", "findings", "read_first"}` — advice for the human, never a gate |
+| chore | write | **one finding** and the chore's instruction (`semipilot chore` only) | one small fix |
 
 Each role is a prompt the orchestrator composes for every call: the role definition (`src/semipilot/roles/`) followed
 by the task. Nothing depends on harness-specific agent files, so the same roles run on Copilot CLI and Claude Code.
@@ -63,6 +75,10 @@ After every agent call, independent of what the agent says it did:
 | All configured checks pass | retry with the failed diff still in place and the errors in the prompt |
 | The same error twice | task blocked (stuck), tree reset to the last good commit |
 | A contract error in a locked test | one logged test-fixer pass; the change is flagged for review |
+| Locked tests fail before any implementation (red check) | a task whose tests already pass is flagged in the report (`tests.red_check: halt` stops the run) |
+| The tier's gates: plan approved by a human, each task accepted | the run stops with `plan_approval` / `task_review` and waits |
+| The reviewer changed nothing | anything it touched is reset |
+| Spend under `budget.max_cost_usd` / `max_premium_requests` | the run stops between tasks (`budget_exhausted`) |
 
 **Done means your checks pass.** The agent is never asked whether it is finished.
 
@@ -98,6 +114,8 @@ writes to cards or instructions — `semipilot-scribe` does, after your review. 
 - Exploratory work where you do not yet know what "done" looks like.
 - Changes that are mostly judgement: UX polish, naming, architecture direction.
 - Very large changes. The refiner proposes a first slice above ~8 tasks; take it.
+- Faster than you can read. One reviewed feature at a time beats three unread ones; the loop has no parallel mode on
+  purpose — your review is the bottleneck, and running more loops only deepens the pile in front of it.
 
 The skills are useful on their own in all of these cases: a tagged spec reviewed at Gate 1 makes interactive agent
 work better too.

@@ -2,6 +2,7 @@
 
 ```
 ### SPEC-CRITIC: APPROVED
+Risk tier: low — during the run you will not be asked for anything
 Notes for the reviewer: the 10 000-row cap is a product decision — confirm it with whoever owns the admin UI.
 Acceptance criteria (verbatim):
 1. Exporting a filtered list of 3 orders produces a CSV with a header row and exactly those 3 orders [check: test_export_respects_filters]

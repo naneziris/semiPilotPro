@@ -3,11 +3,19 @@
 ```
 src/semipilot/
   cli.py            commands; finds the project; init/doctor/status/review output
-  orchestrator.py   the loop: preflight, plan + critique, locked tests, per-task implement/verify, report, rollback
-  runner.py         one call = one process: timeout, logging, classification, backoff, circuit breaker
-  harness.py        adapters: role + permission profile + prompt → argv/stdin; output → answer + metadata
-  roles/            role definitions inlined before the task prompt (planner, plan-fidelity-critic, plan-critic)
-  prompts/          task prompts with {placeholders} (planner-questions, planner-plan, critics, test-writer, …)
+  orchestrator.py   the loop: preflight, plan + critique, the tier's gates, locked tests + red check, per-task
+                    implement/verify, reviewer stage, report, rollback
+  risk.py           risk tiers: declared tier, escalation by the plan's paths, which gates a tier adds
+  review.py         the reviewer call, its verdict normalised, the report's review packet, the MR description
+  usage.py          what a call cost: parsers for each CLI's usage output, the per-role ledger
+  forge.py          `intake` and `mr`: provider detection, gh/glab command lines, push + open request
+  chore.py          `chore`: pick a finding, one agent call, the mechanical gate, memory outside the repo
+  runner.py         one call = one process: timeout, logging, classification, backoff, circuit breaker, usage ledger
+  harness.py        adapters: role + permission profile + prompt → argv/stdin; output → answer + metadata + usage
+  roles/            role definitions inlined before the task prompt (planner, plan-fidelity-critic, plan-critic,
+                    reviewer — the rubric)
+  prompts/          task prompts with {placeholders} (planner-questions, planner-plan, critics, test-writer,
+                    reviewer, chore, …)
   config.py         defaults + project config; layout; knowledge-layer and instructions-file detection
   defaults.yaml     every default, including each harness's allow/deny rules and failure patterns
   initcmd.py        `init`: detect stack, write config, install skills, AGENTS.md
@@ -94,3 +102,5 @@ orchestrator resolves the tags itself and puts the reading list in the prompt, s
 - [design/pilotinloop-handoff-v2.md](design/pilotinloop-handoff-v2.md) — the loop's design of record: every rule
   and the bug it fixes.
 - [design/copilot-cli-findings.md](design/copilot-cli-findings.md) — what Copilot CLI verifiably supports headless.
+- [design/v6-loops-and-factories.md](design/v6-loops-and-factories.md) — why 0.3 added risk tiers, the review gate,
+  cost reporting, chores and the forge commands, and what it deliberately left out.

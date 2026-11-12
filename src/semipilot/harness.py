@@ -1,11 +1,12 @@
 """Harness adapters: the only code that knows which agent CLI runs the loop.
 
 The orchestrator speaks in *roles* (planner, plan-fidelity-critic, plan-critic, test-writer, test-fixer, implementer,
-health) and *permission profiles* (`read`, `write`, `none`). An adapter turns one role call into one fresh,
+reviewer, chore, health) and *permission profiles* (`read`, `write`, `none`). An adapter turns one role call into one fresh,
 non-interactive process of its CLI and turns the CLI's output back into the agent's answer:
 
     adapter.command(role, profile, prompt, log_dir, extra) -> (argv, stdin_text | None)
     adapter.response(stdout)                               -> (text, meta)
+    adapter.usage(stdout, stderr, meta, started, cwd)      -> what the call cost, as far as the CLI reports it
 
 Everything harness-specific that a user might need to change — the executable, tool allow/deny rules per profile,
 failure patterns — lives in `defaults.yaml` under `harnesses.<name>` and can be overridden in
@@ -26,7 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-ROLES = ("planner", "plan-fidelity-critic", "plan-critic", "test-writer", "test-fixer", "implementer", "health")
+from . import usage as usage_mod
+
+ROLES = ("planner", "plan-fidelity-critic", "plan-critic", "test-writer", "test-fixer", "implementer", "reviewer",
+         "chore", "health")
 PROFILES = ("read", "write", "none")
 
 
@@ -114,6 +118,17 @@ class Harness:
         Returns one of the runner's kinds: task_failure | transient | fatal | quota_exhausted."""
         return None
 
+    def usage(self, stdout: str, stderr: str, meta: dict, started: float, cwd: Optional[str] = None) -> dict:
+        """What the call cost, normalised (see usage.py): any of cost_usd, premium_requests, input_tokens,
+        output_tokens, cached_tokens, api_seconds, model. `started` is time.time() when the process was launched.
+        {} when the CLI reports nothing."""
+        return {}
+
+    def scrub(self, stdout: str, stderr: str) -> tuple[str, str]:
+        """stdout/stderr without anything the CLI prints that is neither the answer nor an error (usage stats).
+        The failure patterns are matched against the scrubbed text."""
+        return stdout, stderr
+
     def guard(self, argv: list, prompt: str) -> None:
         forbidden = self.forbidden()
         for arg in argv[1:]:
@@ -171,7 +186,7 @@ class CopilotHarness(Harness):
             arg = pointer_prompt(prompt_file)
         else:
             arg = prompt
-        argv = self.executable + ["-p", arg, "-s", "--no-ask-user"]
+        argv = self.executable + ["-p", arg] + (["-s"] if self.silent else []) + ["--no-ask-user"]
         if self.model_for(role):
             argv += ["--model", self.model_for(role)]
         allow = self.allow(profile)
@@ -181,6 +196,36 @@ class CopilotHarness(Harness):
         argv += [f"--deny-tool={t}" for t in self.deny()]
         argv += ["--log-dir", str(log_dir)]
         return Invocation(argv, prompt_file=prompt_file)
+
+    # ---- usage. Copilot CLI reports premium requests, tokens per model and API time in two places:
+    #   - the `session.shutdown` event of the session's events.jsonl under ~/.copilot/session-state (read after the
+    #     call; nothing about the call itself changes), and
+    #   - a stats block printed at exit, which --silent suppresses. `usage.silent: false` drops --silent so the block
+    #     is printed; it is then parsed and cut from the answer.
+    # `usage.source`: auto (stats block if printed, else the session file) | session | stats | off.
+    @property
+    def ucfg(self) -> dict:
+        u = self.hcfg.get("usage")
+        return u if isinstance(u, dict) else {}
+
+    @property
+    def silent(self) -> bool:
+        return bool(self.ucfg.get("silent", True))
+
+    def usage(self, stdout, stderr, meta, started, cwd=None):
+        source = str(self.ucfg.get("source") or "auto").lower()
+        if source == "off":
+            return {}
+        found: dict = {}
+        if source in ("auto", "stats"):
+            found = usage_mod.parse_copilot_stats(f"{stdout}\n{stderr}")
+        if not found and source in ("auto", "session"):
+            found = usage_mod.read_copilot_session(str(self.ucfg.get("session_state_dir") or "~/.copilot/session-state"),
+                                                   started, str(cwd) if cwd else None)
+        return found
+
+    def scrub(self, stdout, stderr):
+        return usage_mod.strip_copilot_stats(stdout), usage_mod.strip_copilot_stats(stderr)
 
 
 class ClaudeCodeHarness(Harness):
@@ -260,12 +305,18 @@ class ClaudeCodeHarness(Harness):
         else:
             answer = ""
         meta = {k: obj[k] for k in ("is_error", "subtype", "total_cost_usd", "num_turns", "api_error_status") if k in obj}
+        used = usage_mod.claude_usage(obj)
+        if used:
+            meta["usage"] = used
         if isinstance(obj.get("permission_denials"), list):
             meta["permission_denials"] = len(obj["permission_denials"])
         if obj.get("errors"):
             errs = obj["errors"]
             meta["errors"] = "\n".join(map(str, errs)) if isinstance(errs, list) else str(errs)
         return answer, meta
+
+    def usage(self, stdout, stderr, meta, started, cwd=None):
+        return dict(meta.get("usage") or {})
 
     def classify_meta(self, meta: dict) -> Optional[str]:
         """Claude Code reports why a call failed: `subtype` error_max_turns / error_max_budget_usd are the caps the

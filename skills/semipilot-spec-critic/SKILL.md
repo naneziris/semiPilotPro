@@ -1,11 +1,11 @@
 ---
 name: semipilot-spec-critic
-description: "Gate 1 of semiPilot. Reviews a requirements.md for coverage, testability, feasibility, edge cases and size, replies APPROVED or REJECTED with the required fix, and records the human's approval (status approved) so the unattended loop may build it. Use when the user asks to review, critique, check or approve requirements or a spec, or says 'spec-critic', 'gate 1', 'is this spec ready'. Never writes code."
+description: "Gate 1 of semiPilot. Reviews a requirements.md for coverage, testability, feasibility, edge cases, size and risk tier, replies APPROVED or REJECTED with the required fix, and records the human's approval (status approved) so the unattended loop may build it. Use when the user asks to review, critique, check or approve requirements or a spec, or says 'spec-critic', 'gate 1', 'is this spec ready'. Never writes code."
 license: MIT
 argument-hint: "[feature-slug] | approve"
 metadata:
   author: Nikos Aneziris
-  version: "0.2.2"
+  version: "0.3.0"
   suite: semipilot
 ---
 
@@ -46,6 +46,7 @@ failing one, not just the first:
 5. Edge cases the idea implies are covered or explicitly out of scope.
 6. Open questions have defaults, and none would silently change a public interface.
 7. Size — roughly ≤ 8 tasks of ≤ 5 files; larger → propose the first slice.
+8. Risk tier — `risk:` is present and not lower than what the impact analysis and the nature of the change demand.
 
 ## Output
 
@@ -62,6 +63,7 @@ Reasoning: <2–4 sentences citing the criterion, card line, ADR or code>
 
 ```
 ### SPEC-CRITIC: APPROVED
+Risk tier: <low | medium | high> — during the run you will <not be asked for anything | approve the plan once | approve the plan and read every task's commit>
 Notes for the reviewer: <what a human should still look at, or "none">
 Acceptance criteria (verbatim):
 1. ...
@@ -75,7 +77,9 @@ Only after an APPROVED verdict **and** an explicit yes from the user (`approve`,
 1. Set the value of `status:` to `approved` in the frontmatter of that `requirements.md` (drop any comment after it on
    that line). Change nothing else.
 2. Tell the user the next step, in a terminal on their base branch:
-   `semipilot preflight <slug>` (answers the planner's questions first), then `semipilot run <slug>`.
+   `semipilot preflight <slug>` (answers the planner's questions first), then `semipilot run <slug>`. For a
+   `medium` or `high` tier, add that the run will stop for them — once to approve the plan (`semipilot approve`),
+   and at `high` after every task (`semipilot resume`).
 
 Never approve on your own initiative, never approve a REJECTED spec, never edit any other line.
 

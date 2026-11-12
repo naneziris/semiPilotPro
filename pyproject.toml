@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "semipilot"
-version = "0.2.2"
-description = "Requirements → Gate 1 → PilotInLoop: an unattended, test-first build loop for GitHub Copilot CLI and Claude Code, with humans at the gates, a deterministic knowledge layer, and an Agent Skills pack."
+version = "0.3.0"
+description = "Requirements → Gate 1 → PilotInLoop: an unattended, test-first build loop for GitHub Copilot CLI and Claude Code, with humans at the gates a feature's risk tier asks for, a prepared review, small unattended chores, a deterministic knowledge layer, and an Agent Skills pack."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -27,8 +27,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/naneziris/semiPilotPro"
-Documentation = "https://github.com/naneziris/semiPilotPro/tree/v5/docs"
-Changelog = "https://github.com/naneziris/semiPilotPro/blob/v5/CHANGELOG.md"
+Documentation = "https://github.com/naneziris/semiPilotPro/tree/v6/docs"
+Changelog = "https://github.com/naneziris/semiPilotPro/blob/v6/CHANGELOG.md"
 Issues = "https://github.com/naneziris/semiPilotPro/issues"
 
 [project.optional-dependencies]
